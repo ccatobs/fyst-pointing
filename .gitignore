@@ -138,6 +138,7 @@ celerybeat.pid
 .env
 .envrc
 .venv
+.vscode
 env/
 venv/
 ENV/
@@ -190,6 +191,9 @@ cython_debug/
 
 # Ruff stuff:
 .ruff_cache/
+
+# Ephemeris files (downloaded by Skyfield for tests)
+*.bsp
 
 # PyPI configuration file
 .pypirc
