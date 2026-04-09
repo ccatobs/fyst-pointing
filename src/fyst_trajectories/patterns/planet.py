@@ -3,6 +3,8 @@
 Tracks a solar system body as it moves across the sky.
 """
 
+from typing import ClassVar
+
 import numpy as np
 from astropy import units as u
 from astropy.time import Time, TimeDelta
@@ -53,6 +55,8 @@ class PlanetTrackPattern(AltAzPattern):
     >>> trajectory = pattern.generate(site, duration=300.0, start_time=start_time)
     """
 
+    requires_start_time: ClassVar[bool] = True
+
     def __init__(
         self,
         config: PlanetTrackConfig,
@@ -61,7 +65,6 @@ class PlanetTrackPattern(AltAzPattern):
 
     @property
     def name(self) -> str:
-        """Return pattern identifier."""
         return "planet"
 
     def generate(
@@ -134,6 +137,12 @@ class PlanetTrackPattern(AltAzPattern):
         midpoint_time = start_time + TimeDelta(duration / 2.0 * u.s)
         mid_ra, mid_dec = coords.get_body_radec(self.config.body, midpoint_time)
 
+        metadata = self.get_metadata()
+        # Attach midpoint RA/Dec directly to the (frozen) metadata via replace.
+        from dataclasses import replace as _replace
+
+        metadata = _replace(metadata, center_ra=mid_ra, center_dec=mid_dec)
+
         return Trajectory(
             times=times,
             az=az,
@@ -141,24 +150,12 @@ class PlanetTrackPattern(AltAzPattern):
             az_vel=az_vel,
             el_vel=el_vel,
             start_time=start_time,
-            metadata=self.get_metadata(center_ra=mid_ra, center_dec=mid_dec),
+            metadata=metadata,
             coordsys="altaz",
         )
 
-    def get_metadata(
-        self,
-        center_ra: float | None = None,
-        center_dec: float | None = None,
-    ) -> TrajectoryMetadata:
+    def get_metadata(self) -> TrajectoryMetadata:
         """Get pattern metadata.
-
-        Parameters
-        ----------
-        center_ra : float or None, optional
-            Right Ascension of the body at trajectory midpoint, in degrees.
-            Populated by ``generate()`` for parallactic angle computation.
-        center_dec : float or None, optional
-            Declination of the body at trajectory midpoint, in degrees.
 
         Returns
         -------
@@ -169,6 +166,4 @@ class PlanetTrackPattern(AltAzPattern):
             pattern_type=self.name,
             pattern_params={"body": self.config.body},
             target_name=self.config.body,
-            center_ra=center_ra,
-            center_dec=center_dec,
         )

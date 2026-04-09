@@ -51,9 +51,8 @@ Get planet position:
 >>> az, el = coords.get_body_altaz("mars", obstime)
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
-# Core classes
 from .coordinates import (
     FRAME_ALIASES,
     SOLAR_SYSTEM_BODIES,
@@ -69,8 +68,6 @@ from .exceptions import (
     TargetNotObservableError,
     TrajectoryBoundsError,
 )
-
-# Instrument offsets
 from .offsets import (
     InstrumentOffset,
     apply_detector_offset,
@@ -78,8 +75,6 @@ from .offsets import (
     compute_focal_plane_rotation,
     detector_to_boresight,
 )
-
-# Patterns
 from .patterns import (
     AltAzPattern,
     CelestialPattern,
@@ -103,8 +98,6 @@ from .patterns import (
     list_patterns,
     register_pattern,
 )
-
-# Planning layer
 from .planning import (
     FieldRegion,
     ScanBlock,
@@ -112,8 +105,7 @@ from .planning import (
     plan_daisy_scan,
     plan_pong_scan,
 )
-
-# PrimeCam instrument configuration
+from .plotting import plot_hit_map
 from .primecam import (
     PRIMECAM_CENTER,
     PRIMECAM_I1,
@@ -126,8 +118,6 @@ from .primecam import (
     get_primecam_offset,
     resolve_offset,
 )
-
-# Site configuration and FYST physical constants
 from .site import (
     FYST_AZ_MAX,
     FYST_AZ_MAX_ACCELERATION,
@@ -152,9 +142,8 @@ from .site import (
     TelescopeLimits,
     get_fyst_site,
 )
-
-# Trajectory container
 from .trajectory import (
+    SCAN_FLAG_RETUNE,
     SCAN_FLAG_SCIENCE,
     SCAN_FLAG_TURNAROUND,
     SCAN_FLAG_UNCLASSIFIED,
@@ -162,6 +151,7 @@ from .trajectory import (
 )
 from .trajectory_utils import (
     get_absolute_times,
+    inject_retune,
     plot_trajectory,
     print_trajectory,
     to_arrays,
@@ -172,8 +162,8 @@ from .trajectory_utils import (
     validate_trajectory_dynamics,
 )
 
-# Convenience constant: FYST location as astropy EarthLocation
 FYST_LOCATION = get_fyst_site().location
+"""FYST location as astropy EarthLocation (convenience constant)."""
 
 __all__ = [
     # Version
@@ -221,7 +211,9 @@ __all__ = [
     "SCAN_FLAG_UNCLASSIFIED",
     "SCAN_FLAG_SCIENCE",
     "SCAN_FLAG_TURNAROUND",
+    "SCAN_FLAG_RETUNE",
     "print_trajectory",
+    "inject_retune",
     "validate_sun_avoidance",
     "validate_trajectory",
     "validate_trajectory_bounds",
@@ -230,6 +222,7 @@ __all__ = [
     "to_arrays",
     "to_path_format",
     "plot_trajectory",
+    "plot_hit_map",
     # Pattern registry
     "register_pattern",
     "get_pattern",

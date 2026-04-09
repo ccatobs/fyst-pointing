@@ -44,17 +44,9 @@ from astropy.time import Time, TimeDelta
 from .coordinates import Coordinates
 from .exceptions import PointingWarning
 from .offsets import apply_detector_offset
-
-# Planning functions import pattern classes directly rather than going through
-# the registry or TrajectoryBuilder.  This is intentional: planning computes
-# derived parameters (period, azimuth throw, n_scans, etc.) from the field
-# geometry and passes them to pattern constructors, which requires access to
-# the concrete classes.  The registry is designed for user-facing "name to
-# class" lookup. Planning already knows which pattern it needs and benefits
-# from type safety and IDE support that direct imports provide.
+from .patterns.builder import TrajectoryBuilder
 from .patterns.configs import ConstantElScanConfig, DaisyScanConfig, PongScanConfig, ScanConfig
 from .patterns.constant_el import ConstantElScanPattern
-from .patterns.daisy import DaisyScanPattern
 from .patterns.pong import PongScanPattern
 from .site import AtmosphericConditions, Site
 from .trajectory import Trajectory
@@ -106,7 +98,6 @@ class FieldRegion:
     height: float
 
     def __post_init__(self) -> None:
-        """Validate field region parameters."""
         if self.width <= 0:
             raise ValueError(f"width must be positive, got {self.width}")
         if self.height <= 0:
@@ -133,12 +124,9 @@ class ScanBlock:
     Parameters
     ----------
     trajectory : Trajectory
-        The generated trajectory ready for telescope upload.
-        Note: ``Trajectory`` is a mutable dataclass, so while ``ScanBlock``
-        is frozen (``block.trajectory = x`` raises ``AttributeError``),
-        the trajectory's internal arrays can still be modified in place
-        (e.g., ``block.trajectory.metadata = y``). Treat the trajectory
-        as read-only after planning.
+        The generated trajectory ready for telescope upload. Treat this
+        as read-only after planning; downstream code should not mutate
+        its arrays or metadata.
     config : ScanConfig
         The pattern configuration used to generate the trajectory.
     duration : float
@@ -312,12 +300,19 @@ def plan_pong_scan(
 
     duration = period * n_cycles
 
-    trajectory = pattern.generate(
-        site=site, duration=duration, start_time=start_time, atmosphere=atmosphere
+    builder = (
+        TrajectoryBuilder(site)
+        .at(ra=field.ra_center, dec=field.dec_center)
+        .with_config(config)
+        .duration(duration)
+        .starting_at(start_time)
     )
-
+    if atmosphere is not None:
+        builder = builder.with_atmosphere(atmosphere)
     if detector_offset is not None:
-        trajectory = apply_detector_offset(trajectory, detector_offset, site)
+        builder = builder.for_detector(detector_offset)
+
+    trajectory = builder.build()
 
     computed_params = {
         "period": period,
@@ -495,20 +490,26 @@ def _compute_ce_duration(
     corners = _field_region_corners(
         field.ra_center, field.dec_center, field.width, field.height, angle
     )
-    ra_vals = [c[0] for c in corners]
+    ra_vals = [c[0] % 360.0 for c in corners]
+
+    # Detect RA wrap-around: if the naive span exceeds 180 degrees, the
+    # field straddles the RA=0/360 boundary.
+    naive_span = max(ra_vals) - min(ra_vals)
+    if naive_span > 180.0:
+        # Shift values that are below the center into [center-180, center+180]
+        ra_center_mod = field.ra_center % 360.0
+        ra_vals = [((r - ra_center_mod + 180.0) % 360.0 - 180.0 + ra_center_mod) for r in ra_vals]
     ra_min = min(ra_vals)
     ra_max = max(ra_vals)
 
     dt_sec = np.arange(0, max_search_hours * 3600, step_seconds)
     search_times = base_search_time + TimeDelta(dt_sec * u.s)
 
-    # Find when (RA_min, Dec_center) crosses the target elevation
     _, el_min_arr = coords_obj.radec_to_altaz(
         np.full(len(search_times), ra_min),
         np.full(len(search_times), field.dec_center),
         search_times,
     )
-    # Find when (RA_max, Dec_center) crosses the target elevation
     _, el_max_arr = coords_obj.radec_to_altaz(
         np.full(len(search_times), ra_max),
         np.full(len(search_times), field.dec_center),
@@ -524,7 +525,6 @@ def _compute_ce_duration(
             f"(rising={rising}) within {max_search_hours} hours of {base_search_time.iso}"
         )
 
-    # Ensure start < end
     if t_start > t_end:
         t_start, t_end = t_end, t_start
 
@@ -714,7 +714,6 @@ def plan_constant_el_scan(
 
     coords_obj = Coordinates(site, atmosphere=atmosphere)
 
-    # Find when field RA edges cross the target elevation
     obs_start, obs_end, duration = _compute_ce_duration(
         field,
         angle,
@@ -726,15 +725,21 @@ def plan_constant_el_scan(
         step_seconds=step_seconds,
     )
 
-    # Compute azimuth range across the full observation window
     az_min, az_max = _compute_ce_az_range(field, angle, coords_obj, obs_start, obs_end, az_padding)
 
-    # Compute n_scans from duration and sweep time
     az_throw = az_max - az_min
     scan_leg_time = az_throw / velocity
     n_scans = max(1, round(duration / scan_leg_time))
 
-    # Build config, pattern, and trajectory
+    # Compute the actual duration from the CE pattern's cycle geometry so
+    # the trajectory length matches n_scans exactly, rather than using the
+    # elevation-crossing duration which may differ.
+    # Factor 2: trapezoidal velocity profile = ramp-up time (v/a) + ramp-down time (v/a)
+    t_turnaround = 2.0 * velocity / az_accel
+    t_cruise = az_throw / velocity
+    # Each scan leg is one half-cycle (cruise + turnaround).
+    actual_duration = n_scans * (t_cruise + t_turnaround)
+
     config = ConstantElScanConfig(
         timestep=timestep,
         az_start=az_min,
@@ -747,7 +752,7 @@ def plan_constant_el_scan(
 
     pattern = ConstantElScanPattern(config=config)
     trajectory = pattern.generate(
-        site=site, duration=duration, start_time=obs_start, atmosphere=atmosphere
+        site=site, duration=actual_duration, start_time=obs_start, atmosphere=atmosphere
     )
 
     if detector_offset is not None:
@@ -760,7 +765,7 @@ def plan_constant_el_scan(
         "n_scans": n_scans,
         "start_time_iso": obs_start.iso,
         "end_time_iso": obs_end.iso,
-        "duration": duration,
+        "duration": actual_duration,
     }
 
     summary = (
@@ -772,14 +777,15 @@ def plan_constant_el_scan(
         f"  Velocity: {velocity:.3f} deg/s, Acceleration: {az_accel:.3f} deg/s^2\n"
         f"  {'Rising' if rising else 'Setting'} pass: "
         f"{obs_start.iso[:19]} to {obs_end.iso[:19]}\n"
-        f"  Scans: {n_scans}, Duration: {duration:.1f}s ({duration / 60:.1f}min), "
+        f"  Scans: {n_scans}, Duration: {actual_duration:.1f}s "
+        f"({actual_duration / 60:.1f}min), "
         f"Trajectory points: {trajectory.n_points}"
     )
 
     return ScanBlock(
         trajectory=trajectory,
         config=config,
-        duration=duration,
+        duration=actual_duration,
         computed_params=computed_params,
         summary=summary,
     )
@@ -887,16 +893,19 @@ def plan_daisy_scan(
         y_offset=y_offset,
     )
 
-    pattern = DaisyScanPattern(ra=ra, dec=dec, config=config)
-    trajectory = pattern.generate(
-        site=site,
-        duration=duration,
-        start_time=start_time,
-        atmosphere=atmosphere,
+    builder = (
+        TrajectoryBuilder(site)
+        .at(ra=ra, dec=dec)
+        .with_config(config)
+        .duration(duration)
+        .starting_at(start_time)
     )
-
+    if atmosphere is not None:
+        builder = builder.with_atmosphere(atmosphere)
     if detector_offset is not None:
-        trajectory = apply_detector_offset(trajectory, detector_offset, site)
+        builder = builder.for_detector(detector_offset)
+
+    trajectory = builder.build()
 
     computed_params = {
         "duration": duration,

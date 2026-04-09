@@ -34,7 +34,13 @@ class LinearMotionPattern(AltAzPattern):
     Examples
     --------
     >>> from fyst_trajectories.patterns import LinearMotionPattern, LinearMotionConfig
-    >>> config = LinearMotionConfig(az_start=100.0, el_start=45.0, az_velocity=0.5, el_velocity=0.1)
+    >>> config = LinearMotionConfig(
+    ...     timestep=0.1,
+    ...     az_start=100.0,
+    ...     el_start=45.0,
+    ...     az_velocity=0.5,
+    ...     el_velocity=0.1,
+    ... )
     >>> pattern = LinearMotionPattern(config)
     >>> trajectory = pattern.generate(site, duration=60.0)
     """
@@ -44,14 +50,13 @@ class LinearMotionPattern(AltAzPattern):
 
     @property
     def name(self) -> str:
-        """Return pattern identifier."""
         return "linear"
 
     def generate(
         self,
         site: Site,
         duration: float,
-        start_time: Time | None,
+        start_time: Time | None = None,
         atmosphere: AtmosphericConditions | None = None,
     ) -> Trajectory:
         """Generate the linear motion trajectory.

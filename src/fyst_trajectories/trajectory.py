@@ -4,9 +4,9 @@ This module provides the Trajectory class which holds time-stamped
 position and velocity setpoints for both azimuth and elevation axes,
 suitable for upload to the telescope ACU.
 
-The trajectory data is intentionally minimal to keep this class lean.
-Metadata about pattern type, generation parameters, etc. can be
-attached via the optional `metadata` attribute.
+The trajectory data is intentionally minimal; metadata about pattern
+type, generation parameters, and input coordinates can be attached
+via the optional ``metadata`` attribute.
 
 Utility functions (validate, export, format, plot) are in
 :mod:`fyst_trajectories.trajectory_utils`. The Trajectory methods delegate
@@ -64,19 +64,12 @@ if TYPE_CHECKING:
     from .patterns.base import TrajectoryMetadata
     from .site import Site
 
-# Scan flag constants for turnaround flagging.
-# These follow the SO ACU convention: 0 = unclassified, 1 = science, 2 = turnaround.
 SCAN_FLAG_UNCLASSIFIED: int = 0
 SCAN_FLAG_SCIENCE: int = 1
 SCAN_FLAG_TURNAROUND: int = 2
+SCAN_FLAG_RETUNE: int = 3
 
 
-# Trajectory is intentionally a non-frozen (mutable) dataclass.  Pattern
-# generate() methods and TrajectoryBuilder set metadata after construction,
-# and apply_detector_offset returns a new instance rather than mutating.
-# Making it frozen would require plumbing metadata through every constructor
-# call with no safety benefit, since Trajectory is a value object that is
-# not shared across threads.
 @dataclass
 class Trajectory:
     """Container for a telescope trajectory.
@@ -141,7 +134,6 @@ class Trajectory:
     scan_flag: np.ndarray | None = None
 
     def __post_init__(self) -> None:
-        """Validate that all trajectory arrays have the same length and are finite."""
         n = len(self.times)
         if n < 1:
             raise ValueError("Trajectory requires at least 1 time point")
@@ -368,7 +360,6 @@ class Trajectory:
         return plot_trajectory(self, show)
 
     def __repr__(self) -> str:
-        """Return string representation of the trajectory."""
         pattern_info = f", pattern={self.pattern_type}" if self.pattern_type else ""
         return (
             f"Trajectory(n_points={self.n_points}, "

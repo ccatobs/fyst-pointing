@@ -1,10 +1,8 @@
 """Scan pattern implementations for telescope trajectories.
 
-This package provides:
-- Pattern base classes and protocols
-- Registry for pattern discovery
-- Individual pattern implementations
-- TrajectoryBuilder for fluent construction
+This package provides pattern base classes, individual pattern
+implementations, a name-based pattern registry, and the
+:class:`TrajectoryBuilder` fluent API for assembling trajectories.
 
 Examples
 --------
@@ -58,24 +56,16 @@ Listing available patterns:
 ['constant_el', 'daisy', 'linear', 'planet', 'pong', 'sidereal']
 """
 
-# Registry - must be imported first before patterns
-# Import patterns to trigger registration (order matters for dependencies)
+# Import patterns to trigger registration (order matters)
 from . import constant_el as constant_el  # noqa: F401  # pylint: disable=useless-import-alias
 from . import daisy as daisy  # noqa: F401  # pylint: disable=useless-import-alias
 from . import linear as linear  # noqa: F401  # pylint: disable=useless-import-alias
 from . import planet as planet  # noqa: F401  # pylint: disable=useless-import-alias
 from . import pong as pong  # noqa: F401  # pylint: disable=useless-import-alias
 from . import sidereal as sidereal  # noqa: F401  # pylint: disable=useless-import-alias
-
-# Base classes
 from .base import AltAzPattern, CelestialPattern, ScanPattern, TrajectoryMetadata
-
-# Builder - import last after all patterns are registered
 from .builder import TrajectoryBuilder
-
-# Configs - all pattern configuration classes
 from .configs import (
-    CONFIG_TO_PATTERN,
     ConstantElScanConfig,
     DaisyScanConfig,
     LinearMotionConfig,
@@ -84,8 +74,6 @@ from .configs import (
     ScanConfig,
     SiderealTrackConfig,
 )
-
-# Pattern classes (for direct use)
 from .constant_el import ConstantElScanPattern
 from .daisy import DaisyScanPattern
 from .linear import LinearMotionPattern
@@ -112,7 +100,6 @@ __all__ = [
     "SiderealTrackConfig",
     "PlanetTrackConfig",
     "LinearMotionConfig",
-    "CONFIG_TO_PATTERN",
     # Pattern classes
     "ConstantElScanPattern",
     "LinearMotionPattern",

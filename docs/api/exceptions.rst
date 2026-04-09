@@ -21,8 +21,11 @@ Usage Examples
         block = plan_pong_scan(
             field=FieldRegion(ra_center=180.0, dec_center=80.0, width=2.0, height=2.0),
             velocity=0.5,
+            spacing=0.1,
+            num_terms=4,
             site=get_fyst_site(),
             start_time=Time("2024-06-15T12:00:00", scale="utc"),
+            timestep=0.1,
         )
     except TargetNotObservableError as e:
         print(f"Target not observable: {e}")

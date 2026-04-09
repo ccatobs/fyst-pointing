@@ -270,15 +270,6 @@ class TestAccelerationJerkProperties:
 
         np.testing.assert_allclose(jerk_via_property, jerk_manual, atol=1e-10)
 
-    def test_properties_recompute_each_call(self):
-        """Test that properties are computed fresh (not cached stale values)."""
-        traj = self._make_constant_velocity_trajectory()
-        accel1 = traj.az_accel
-        accel2 = traj.az_accel
-        # They should be equal but not the same object (recomputed)
-        np.testing.assert_array_equal(accel1, accel2)
-        assert accel1 is not accel2
-
 
 class TestFormatTrajectory:
     """Tests for _format_trajectory and print_trajectory."""

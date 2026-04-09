@@ -161,7 +161,7 @@ Multiple cycles::
         spacing=0.1,
         num_terms=4,
         site=site,
-        start_time=Time("2026-03-15T04:00:00", scale="utc"),
+        start_time=Time("2026-03-15T22:12:00", scale="utc"),
         timestep=0.1,
         n_cycles=3,      # observe 3 full Pong periods
     )
@@ -177,7 +177,7 @@ With a detector offset (for off-axis PrimeCam modules)::
         spacing=0.1,
         num_terms=4,
         site=site,
-        start_time=Time("2026-03-15T04:00:00", scale="utc"),
+        start_time=Time("2026-03-15T22:12:00", scale="utc"),
         timestep=0.1,
         detector_offset=offset,
     )

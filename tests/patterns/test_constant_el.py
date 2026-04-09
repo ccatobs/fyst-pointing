@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 from astropy.time import Time
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 from fyst_trajectories.patterns import ConstantElScanConfig, ConstantElScanPattern
@@ -309,6 +309,13 @@ class TestConstantElPropertyBased:
         - Duration matches requested duration
         """
         az_stop = az_start + az_throw
+
+        # Filter out parameter combos where turnaround distance would push
+        # the motion range beyond telescope azimuth limits [-180, 360].
+        d_half_turn = 5 * az_speed**2 / (8 * az_accel)
+        motion_min = az_start - d_half_turn
+        motion_max = az_start + az_throw + d_half_turn
+        assume(motion_min >= -180.0 and motion_max <= 360.0)
 
         config = ConstantElScanConfig(
             timestep=0.1,

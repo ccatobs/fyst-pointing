@@ -37,13 +37,6 @@ import yaml
 from astropy import units as u
 from astropy.coordinates import EarthLocation
 
-# ============================================================================
-# FYST Physical Constants
-# ============================================================================
-#
-# These values are the single source of truth for FYST telescope parameters.
-# They are used by get_fyst_site() to construct the default Site instance.
-#
 # Tier 1: Truly fixed (geography / optical prescription)
 # Source: FYST TCS (telescope-control-system/astro.go)
 #   lat = -22d59m08.30s, lon = -67d44m25.00s, elev = 5611.8 m
@@ -100,11 +93,16 @@ Conservative operational limit (TCS hardware limit: 1.5 deg/s^2).
 
 # Tier 3: Operational defaults (may change between observing seasons)
 
-# TODO: verify sun avoidance radii with FYST team
+# FYST sun avoidance radii. The 45 deg exclusion is comparable to the
+# Simons Observatory SAT's 41 deg at similar altitude and submillimetre
+# wavelengths (Hoang et al. 2024, arXiv:2406.10905), supporting the
+# magnitude. ALMA uses 15 deg (much more permissive) at lower altitude
+# with different optical/thermal constraints.
+# TODO: verify sun avoidance radii with FYST team during commissioning.
 FYST_SUN_EXCLUSION_RADIUS: float = 45.0
 """Sun exclusion radius in degrees."""
 
-# TODO: verify sun avoidance radii with FYST team
+# TODO: verify sun avoidance radii with FYST team during commissioning.
 FYST_SUN_WARNING_RADIUS: float = 50.0
 """Sun warning radius in degrees."""
 
@@ -187,7 +185,6 @@ class AtmosphericConditions:
     obswl: float | None = None
 
     def __post_init__(self) -> None:
-        """Validate atmospheric conditions."""
         if not 0 <= self.relative_humidity <= 1:
             raise ValueError(
                 f"relative_humidity must be in range [0, 1], got {self.relative_humidity}"
@@ -266,7 +263,6 @@ class AxisLimits:
     max_acceleration: float
 
     def __post_init__(self) -> None:
-        """Validate axis limits."""
         if self.min > self.max:
             raise ValueError(f"min ({self.min}) must be <= max ({self.max})")
 
@@ -281,33 +277,11 @@ class AxisLimits:
         return self.max * u.deg
 
     def is_in_range(self, position: float) -> bool:
-        """Check if a position is within limits.
-
-        Parameters
-        ----------
-        position : float
-            Position in degrees.
-
-        Returns
-        -------
-        bool
-            True if position is within [min, max] range.
-        """
+        """Return True if *position* (degrees) is within [min, max]."""
         return self.min <= position <= self.max
 
     def clip(self, position: float) -> float:
-        """Clip a position to within limits.
-
-        Parameters
-        ----------
-        position : float
-            Position in degrees.
-
-        Returns
-        -------
-        float
-            Position clipped to [min, max] range.
-        """
+        """Clip *position* (degrees) to the [min, max] range."""
         return np.clip(position, self.min, self.max)
 
 
@@ -421,7 +395,6 @@ class Site:
 
     name: str
     description: str
-    # Coordinates from FYST TCS (astro.go): -22d59m08.30s, -67d44m25.00s
     latitude: float
     longitude: float
     elevation: float
@@ -432,7 +405,6 @@ class Site:
     plate_scale: float = 0.0
 
     def __post_init__(self) -> None:
-        """Validate site configuration."""
         port = self.nasmyth_port.lower()
         if port not in _NASMYTH_SIGNS:
             raise ValueError(

@@ -84,9 +84,9 @@ Usage Examples
 AltAzCoord
 ~~~~~~~~~~
 
-``AltAzCoord`` is a frozen dataclass holding ``az`` and ``alt`` fields
-in degrees.  ``el`` is available as a property alias for ``alt``.
-It is returned by several :class:`Coordinates` helper methods::
+``AltAzCoord`` holds ``az`` and ``alt`` fields in degrees, with ``el``
+available as a property alias for ``alt``. It is returned by several
+:class:`Coordinates` helper methods::
 
     from fyst_trajectories import AltAzCoord
 

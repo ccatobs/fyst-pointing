@@ -14,7 +14,6 @@ from fyst_trajectories import Coordinates, get_fyst_site
 
 
 def pytest_addoption(parser):
-    """Add --run-slow option to pytest."""
     parser.addoption(
         "--run-slow",
         action="store_true",
@@ -24,12 +23,10 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
-    """Configure pytest to handle slow marker."""
     config.addinivalue_line("markers", "slow: marks tests as slow")
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip slow tests unless --run-slow is given."""
     if config.getoption("--run-slow"):
         return
     skip_slow = pytest.mark.skip(reason="need --run-slow option to run")

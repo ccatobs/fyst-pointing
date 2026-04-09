@@ -39,12 +39,13 @@ Scan Flags
 ----------
 
 Each trajectory sample can be classified with a scan flag indicating
-whether it is science data or a turnaround.  Three constants are
-exported from ``fyst_trajectories``:
+whether it is science data, a turnaround, or a retune pause.  Four
+constants are exported from ``fyst_trajectories``:
 
 - ``SCAN_FLAG_UNCLASSIFIED`` (0) -- default when no classification is available.
 - ``SCAN_FLAG_SCIENCE`` (1) -- science-quality samples.
 - ``SCAN_FLAG_TURNAROUND`` (2) -- turnaround or slew samples.
+- ``SCAN_FLAG_RETUNE`` (3) -- KID retune pause (injected by ``inject_retune()``).
 
 The ``science_mask`` property returns a boolean mask that is ``True``
 for science samples, making it easy to filter trajectory data::
@@ -56,7 +57,7 @@ for science samples, making it easy to filter trajectory data::
     traj = pattern.generate(site, duration=3600.0, start_time=t0)
 
     # Get only science samples (excludes turnarounds)
-    science_data = traj.azimuths[traj.science_mask]
+    science_data = traj.az[traj.science_mask]
 
     # Check flag values directly
     n_turnaround = np.sum(traj.scan_flag == SCAN_FLAG_TURNAROUND)

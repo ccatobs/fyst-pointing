@@ -177,17 +177,13 @@ def plot_hit_map(
     if trajectory.start_time is None:
         raise ValueError("Trajectory must have start_time for RA/Dec conversion")
 
-    # Deferred imports to avoid circular dependencies at module load time
-    # pylint: disable=import-outside-toplevel
-    from .coordinates import Coordinates
+    from .coordinates import Coordinates  # pylint: disable=import-outside-toplevel
     from .offsets import boresight_to_detector, compute_focal_plane_rotation
     from .trajectory_utils import get_absolute_times
-    # pylint: enable=import-outside-toplevel
 
     coords = Coordinates(site, atmosphere=None)
     abs_times = get_absolute_times(trajectory)
 
-    # Compute parallactic angle if celestial context is available
     if trajectory.center_ra is not None and trajectory.center_dec is not None:
         ra_arr = np.full(len(trajectory.times), trajectory.center_ra)
         dec_arr = np.full(len(trajectory.times), trajectory.center_dec)
@@ -228,13 +224,11 @@ def plot_hit_map(
         # Convert to RA/Dec
         ra, dec = coords.altaz_to_radec(det_az, det_el, obstime=abs_times)
 
-        # Handle RA wrapping around 0/360
         ra = np.asarray(ra, dtype=float)
         dec = np.asarray(dec, dtype=float)
         if ra.max() - ra.min() > 180:
             ra = (ra + 180) % 360 - 180
 
-        # 2D histogram with padding for FOV convolution
         ra_bins = np.arange(
             ra.min() - bin_size - pad_deg,
             ra.max() + 2 * bin_size + pad_deg,
@@ -251,7 +245,6 @@ def plot_hit_map(
             bins=[ra_bins, dec_bins],
         )
 
-        # Module FOV convolution (disk kernel)
         if coverage_mode:
             try:
                 from scipy.signal import fftconvolve  # pylint: disable=import-outside-toplevel
@@ -263,11 +256,9 @@ def plot_hit_map(
             radius_bins = (module_fov / 2.0) / bin_size
             kernel = _make_disk_kernel(radius_bins)
             hist = fftconvolve(hist, kernel, mode="same")
-            # Clean FFT artifacts: clip negatives and zero out noise floor
             np.maximum(hist, 0.0, out=hist)
             hist[hist < 1e-10] = 0.0
 
-        # Optional Gaussian smoothing
         if smooth_sigma is not None:
             try:
                 from scipy.ndimage import gaussian_filter  # pylint: disable=import-outside-toplevel
@@ -278,7 +269,6 @@ def plot_hit_map(
                 ) from None
             hist = gaussian_filter(hist, sigma=smooth_sigma)
 
-        # Plot
         ra_centers = 0.5 * (ra_edges[:-1] + ra_edges[1:])
         dec_centers = 0.5 * (dec_edges[:-1] + dec_edges[1:])
         im = ax.pcolormesh(
@@ -290,7 +280,6 @@ def plot_hit_map(
         )
         fig.colorbar(im, ax=ax, label="Hits", shrink=0.8)
 
-        # Footprint contour
         if hist.max() > 0:
             threshold_val = footprint_threshold * hist.max()
             ax.contour(
@@ -302,10 +291,8 @@ def plot_hit_map(
                 linewidths=1.5,
             )
 
-        # Statistics overlay
         thresh_pct = int(stats_threshold * 100)
         if coverage_mode:
-            # Coverage mode: report absolute area in deg^2
             footprint_area = np.count_nonzero(hist) * bin_area_deg2
             if hist.max() > 0:
                 well_covered_area = (
@@ -318,7 +305,6 @@ def plot_hit_map(
                 f"$A_{{>{thresh_pct}\\%max}}$ = {well_covered_area:.1f} deg$^2$"
             )
         else:
-            # Track mode: report fractional ratios
             nonzero_bins = int(np.count_nonzero(hist))
             total_bins = hist.size
             if hist.max() > 0:

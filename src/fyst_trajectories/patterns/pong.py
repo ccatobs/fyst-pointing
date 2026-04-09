@@ -17,12 +17,24 @@ from astropy.time import Time, TimeDelta
 from ..coordinates import Coordinates
 from ..exceptions import TargetNotObservableError, TrajectoryBoundsError
 from ..site import AtmosphericConditions, Site
-from ..trajectory import Trajectory
+from ..trajectory import SCAN_FLAG_SCIENCE, SCAN_FLAG_TURNAROUND, Trajectory
 from ..trajectory_utils import validate_trajectory_bounds
 from .base import CelestialPattern, TrajectoryMetadata
 from .configs import PongScanConfig
 from .registry import register_pattern
 from .utils import compute_velocities, normalize_azimuth, sky_offsets_to_altaz
+
+_TURNAROUND_SPEED_THRESHOLD: float = 0.8
+"""Fraction of nominal velocity below which samples are flagged as turnaround.
+
+Samples with offset-frame speed below ``threshold * config.velocity`` are
+classified as SCAN_FLAG_TURNAROUND.
+
+Empirical turnaround threshold: 0.8 captures the slowing region of the
+Fourier-truncated triangle wave near vertices. No published cross-facility
+standard exists for this exact value; it is a design choice tuned for
+FYST/Prime-Cam scan dynamics.
+"""
 
 
 @functools.lru_cache(maxsize=4)
@@ -61,8 +73,6 @@ def _compute_pong_vertices(
     x_numvert = math.ceil(width / vert_spacing)
     y_numvert = math.ceil(height / vert_spacing)
 
-    # Coprime counts with opposite parity ensure the scan path fills
-    # the rectangle uniformly before repeating (see SCUBA paper in module docstring).
     if x_numvert % 2 == y_numvert % 2:
         if x_numvert >= y_numvert:
             y_numvert += 1
@@ -72,14 +82,12 @@ def _compute_pong_vertices(
     num_vert = [x_numvert, y_numvert]
     most_i = num_vert.index(max(x_numvert, y_numvert))
 
-    # Ensure coprime by incrementing the larger count by 2 until GCD = 1
     while math.gcd(num_vert[0], num_vert[1]) != 1:
         num_vert[most_i] += 2
 
     x_numvert = num_vert[0]
     y_numvert = num_vert[1]
 
-    # Compute amplitudes
     amp_x = x_numvert * vert_spacing / 2
     amp_y = y_numvert * vert_spacing / 2
 
@@ -117,7 +125,15 @@ class PongScanPattern(CelestialPattern):
     >>> from astropy.time import Time
     >>> from fyst_trajectories.patterns import PongScanPattern, PongScanConfig
     >>> start_time = Time("2026-03-15T04:00:00", scale="utc")
-    >>> config = PongScanConfig(width=2.0, height=2.0, spacing=0.1, velocity=0.5)
+    >>> config = PongScanConfig(
+    ...     timestep=0.1,
+    ...     width=2.0,
+    ...     height=2.0,
+    ...     spacing=0.1,
+    ...     velocity=0.5,
+    ...     num_terms=4,
+    ...     angle=0.0,
+    ... )
     >>> pattern = PongScanPattern(ra=180.0, dec=-30.0, config=config)
     >>> trajectory = pattern.generate(site, duration=300.0, start_time=start_time)
     """
@@ -133,7 +149,6 @@ class PongScanPattern(CelestialPattern):
 
     @property
     def name(self) -> str:
-        """Return pattern identifier."""
         return "pong"
 
     def generate_offsets(self, duration: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -231,6 +246,15 @@ class PongScanPattern(CelestialPattern):
 
         times, x_offsets, y_offsets = self.generate_offsets(duration)
 
+        # Compute scan_flag from offset-frame velocities.
+        # Turnaround regions are where speed drops below 80% of nominal,
+        # indicating the pattern is reversing direction near a vertex.
+        x_vel = np.gradient(x_offsets, times)
+        y_vel = np.gradient(y_offsets, times)
+        speed = np.sqrt(x_vel**2 + y_vel**2)
+        scan_flag = np.full(len(times), SCAN_FLAG_TURNAROUND, dtype=np.int8)
+        scan_flag[speed >= _TURNAROUND_SPEED_THRESHOLD * self.config.velocity] = SCAN_FLAG_SCIENCE
+
         obstimes = start_time + TimeDelta(times * u.s)
 
         az, el = sky_offsets_to_altaz(
@@ -264,6 +288,7 @@ class PongScanPattern(CelestialPattern):
             start_time=start_time,
             metadata=self.get_metadata(),
             coordsys="altaz",
+            scan_flag=scan_flag,
         )
 
     def get_metadata(self) -> TrajectoryMetadata:

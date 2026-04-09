@@ -48,7 +48,15 @@ class ConstantElScanPattern(AltAzPattern):
     Examples
     --------
     >>> from fyst_trajectories.patterns import ConstantElScanPattern, ConstantElScanConfig
-    >>> config = ConstantElScanConfig(az_start=120.0, az_stop=180.0, elevation=45.0)
+    >>> config = ConstantElScanConfig(
+    ...     timestep=0.1,
+    ...     az_start=120.0,
+    ...     az_stop=180.0,
+    ...     elevation=45.0,
+    ...     az_speed=0.5,
+    ...     az_accel=1.0,
+    ...     n_scans=10,
+    ... )
     >>> pattern = ConstantElScanPattern(config)
     >>> trajectory = pattern.generate(site, duration=60.0)
     """
@@ -58,14 +66,13 @@ class ConstantElScanPattern(AltAzPattern):
 
     @property
     def name(self) -> str:
-        """Return pattern identifier."""
         return "constant_el"
 
     def generate(
         self,
         site: Site,
         duration: float,
-        start_time: Time | None,
+        start_time: Time | None = None,
         atmosphere: AtmosphericConditions | None = None,
     ) -> Trajectory:
         """Generate the scan trajectory.
@@ -76,8 +83,9 @@ class ConstantElScanPattern(AltAzPattern):
             Telescope site configuration.
         duration : float
             Total duration in seconds.
-        start_time : Time or None
-            Start time for the trajectory.
+        start_time : Time or None, optional
+            Start time for the trajectory. Optional; defaults to ``None``
+            (acceptable for AltAz patterns where absolute time is not needed).
         atmosphere : AtmosphericConditions or None, optional
             Not used by this AltAz pattern (no coordinate transforms).
             Accepted for interface compatibility.
@@ -194,11 +202,10 @@ class ConstantElScanPattern(AltAzPattern):
             Per-sample scan flag (1 = science, 2 = turnaround).
         """
         az_throw = az_max - az_min
-        # Quintic turnaround: T = 2*v/a_avg, d = 5*v^2/(8*a_avg)
+        # Factor 2: trapezoidal velocity profile = ramp-up time (v/a) + ramp-down time (v/a)
         t_turnaround = 2.0 * az_speed / az_accel
         d_half_turn = 5.0 * az_speed**2 / (8.0 * az_accel)
 
-        # Cruise covers the full science region, turnarounds are outside
         d_cruise = az_throw
         motion_min = az_min - d_half_turn
         motion_max = az_max + d_half_turn
@@ -210,7 +217,6 @@ class ConstantElScanPattern(AltAzPattern):
 
         scan_flag = np.empty(len(times), dtype=np.int8)
 
-        # Quintic velocity profile: cruise + single turnaround phase
         t_cruise_time = d_cruise / az_speed
         t_half_cycle = t_cruise_time + t_turnaround
         cycle_time = 2.0 * t_half_cycle
@@ -222,14 +228,11 @@ class ConstantElScanPattern(AltAzPattern):
         direction = np.where(in_first_half, dir_fwd, dir_rev)
         start_pos = np.where(in_first_half, pos_fwd, pos_rev)
 
-        # Two phases per half-cycle: cruise, then quintic turnaround
         in_cruise = t_in_half < t_cruise_time
 
-        # Cruise phase
         vel_cruise = direction * az_speed
         pos_cruise = start_pos + direction * az_speed * t_in_half
 
-        # Quintic turnaround phase
         t_turn = t_in_half - t_cruise_time
         turn_offset, turn_vel = quintic_turnaround(t_turn, az_speed, t_turnaround)
         pos_turn = start_pos + direction * (d_cruise + turn_offset)
@@ -238,14 +241,10 @@ class ConstantElScanPattern(AltAzPattern):
         velocities = np.where(in_cruise, vel_cruise, vel_turn)
         positions = np.where(in_cruise, pos_cruise, pos_turn)
 
-        # Cruise samples within science region are science,
-        # everything else (including cruise samples in overscan) is turnaround
         scan_flag[:] = SCAN_FLAG_TURNAROUND
         in_science = in_cruise & (positions >= az_min) & (positions <= az_max)
         scan_flag[in_science] = SCAN_FLAG_SCIENCE
 
-        # Positions intentionally exceed [az_min, az_max].
-        # Clip only floating-point noise beyond the expected motion range.
         pos_min = positions.min()
         pos_max = positions.max()
         overshoot = max(motion_min - pos_min, pos_max - motion_max)

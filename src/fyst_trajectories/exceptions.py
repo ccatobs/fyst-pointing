@@ -70,19 +70,6 @@ class TrajectoryBoundsError(PointingError):
     limit_max : float
         Allowed maximum (degrees).
 
-    Attributes
-    ----------
-    axis : str
-        The axis that exceeded limits.
-    actual_min : float
-        Minimum value in the trajectory (degrees).
-    actual_max : float
-        Maximum value in the trajectory (degrees).
-    limit_min : float
-        Allowed minimum (degrees).
-    limit_max : float
-        Allowed maximum (degrees).
-
     Examples
     --------
     Catch and inspect a bounds error:
@@ -202,15 +189,6 @@ class TargetNotObservableError(PointingError):
         Name or description of the target (e.g., "mars", "RA=180.0 Dec=-30.0").
     time_info : str
         Human-readable time description (e.g., "2026-06-15T04:00:00").
-    bounds_error : TrajectoryBoundsError
-        The underlying bounds error with structured limit data.
-
-    Attributes
-    ----------
-    target : str
-        Name or description of the target.
-    time_info : str
-        Human-readable time description.
     bounds_error : TrajectoryBoundsError
         The underlying bounds error with structured limit data.
 

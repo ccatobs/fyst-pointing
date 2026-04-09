@@ -222,6 +222,10 @@ class TestPongScanFlags:
         pattern = PongScanPattern(ra=180.0, dec=-30.0, config=config)
         trajectory = pattern.generate(site, duration=60.0, start_time=start_time)
 
-        assert trajectory.scan_flag is None
-        # science_mask should be all True when scan_flag is None
-        assert np.all(trajectory.science_mask)
+        assert trajectory.scan_flag is not None
+        # scan_flag should contain both SCIENCE (1) and TURNAROUND (2) flags
+        assert np.any(trajectory.scan_flag == 1)  # SCAN_FLAG_SCIENCE
+        assert np.any(trajectory.scan_flag == 2)  # SCAN_FLAG_TURNAROUND
+        # Majority should be science
+        science_frac = (trajectory.scan_flag == 1).sum() / len(trajectory.scan_flag)
+        assert science_frac > 0.7

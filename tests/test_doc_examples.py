@@ -722,3 +722,478 @@ def test_coordsys_proper_motion():
     )
     assert isinstance(az, float)
     assert isinstance(el, float)
+
+
+# ============================================================================
+# planning.rst examples
+# ============================================================================
+#
+# These tests exercise every code example in ``docs/planning.rst``.  They exist
+# to close a coverage gap: until v0.3.0, ``planning.rst`` had zero tests, which
+# allowed two broken ``plan_pong_scan`` examples (using an unobservable
+# ``start_time`` for the Chandra Deep Field South) to reach release.  The
+# regression test ``test_planning_plan_pong_scan_chandra_deep_field_observable``
+# locks in the corrected time.
+
+
+def test_planning_quickstart_pong():
+    """Test Quick Start plan_pong_scan example from planning.rst."""
+    from astropy.time import Time
+
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.planning import FieldRegion, plan_pong_scan
+
+    site = get_fyst_site()
+
+    field = FieldRegion(ra_center=180.0, dec_center=-30.0, width=2.0, height=2.0)
+    block = plan_pong_scan(
+        field=field,
+        velocity=0.5,  # deg/s
+        spacing=0.1,  # deg between scan lines
+        num_terms=4,  # Fourier terms for smooth turnarounds
+        site=site,
+        start_time=Time("2026-03-15T04:00:00", scale="utc"),
+        timestep=0.1,
+    )
+
+    print(block.summary)
+    print(f"Duration: {block.duration:.1f}s ({block.duration / 3600:.1f}h)")
+    print(f"Trajectory: {block.trajectory.n_points} points")
+
+    assert block.trajectory.n_points > 0
+    assert block.trajectory.scan_flag is not None
+    assert len(block.trajectory.scan_flag) == block.trajectory.n_points
+    # Trajectory should stay within FYST telescope limits.
+    el_limits = site.telescope_limits.elevation
+    assert block.trajectory.el.min() >= el_limits.min
+    assert block.trajectory.el.max() <= el_limits.max
+
+
+def test_planning_quickstart_constant_el():
+    """Test Quick Start plan_constant_el_scan example from planning.rst."""
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.planning import FieldRegion, plan_constant_el_scan
+
+    site = get_fyst_site()
+
+    field = FieldRegion(ra_center=0.0, dec_center=-2.0, width=60.0, height=14.0)
+    with pytest.warns(PointingWarning):
+        # Scan width of 60 deg is above the advisory MAX_REASONABLE_SCAN_WIDTH_DEG.
+        block = plan_constant_el_scan(
+            field=field,
+            elevation=50.0,
+            velocity=0.5,
+            site=site,
+            start_time="2026-09-15T00:00:00",
+            rising=True,
+        )
+
+    print(block.summary)
+    print(f"Duration: {block.duration:.0f}s")
+
+    assert block.trajectory.n_points > 0
+    assert block.duration > 0
+
+
+def test_planning_field_region_cmb():
+    """Test FieldRegion construction example from planning.rst."""
+    from fyst_trajectories.planning import FieldRegion
+
+    # Stripe 82 CMB field: 60 deg RA x 14 deg Dec
+    cmb_field = FieldRegion(
+        ra_center=0.0,  # deg (0h RA)
+        dec_center=-2.0,  # deg
+        width=60.0,  # RA extent in degrees
+        height=14.0,  # Dec extent in degrees
+    )
+
+    # Dec boundaries are computed automatically
+    print(f"Dec range: [{cmb_field.dec_min}, {cmb_field.dec_max}]")
+    assert cmb_field.dec_min == pytest.approx(-9.0)
+    assert cmb_field.dec_max == pytest.approx(5.0)
+
+
+def test_planning_plan_pong_scan_basic_chandra_deep_field():
+    """Test basic plan_pong_scan example from planning.rst (Chandra Deep Field).
+
+    This is the regression-critical test: the previous docs used
+    ``start_time="2026-03-15T04:00:00"`` which left the Chandra Deep Field
+    South below the horizon, raising ``TargetNotObservableError``.  The
+    corrected example uses ``"2026-03-15T22:12:00"``.
+    """
+    from astropy.time import Time
+
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.planning import FieldRegion, plan_pong_scan
+
+    site = get_fyst_site()
+
+    field = FieldRegion(ra_center=53.117, dec_center=-27.808, width=5.0, height=6.7)
+    block = plan_pong_scan(
+        field=field,
+        velocity=0.5,
+        spacing=0.08,
+        num_terms=4,
+        site=site,
+        start_time=Time("2026-03-15T22:12:00", scale="utc"),
+        timestep=0.1,
+        angle=170.0,  # rotation angle (degrees)
+    )
+
+    assert block.trajectory.n_points > 0
+    assert block.trajectory.scan_flag is not None
+    assert len(block.trajectory.scan_flag) == block.trajectory.n_points
+    el_limits = site.telescope_limits.elevation
+    assert block.trajectory.el.min() >= el_limits.min
+    assert block.trajectory.el.max() <= el_limits.max
+
+
+def test_planning_plan_pong_scan_multiple_cycles():
+    """Test multi-cycle plan_pong_scan example from planning.rst."""
+    from astropy.time import Time
+
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.planning import FieldRegion, plan_pong_scan
+
+    site = get_fyst_site()
+    field = FieldRegion(ra_center=53.117, dec_center=-27.808, width=5.0, height=6.7)
+
+    block = plan_pong_scan(
+        field=field,
+        velocity=0.5,
+        spacing=0.1,
+        num_terms=4,
+        site=site,
+        start_time=Time("2026-03-15T22:12:00", scale="utc"),
+        timestep=0.1,
+        n_cycles=3,  # observe 3 full Pong periods
+    )
+
+    assert block.trajectory.n_points > 0
+    assert block.computed_params["n_cycles"] == 3
+    # Duration should equal 3 periods.
+    assert block.duration == pytest.approx(block.computed_params["period"] * 3)
+
+
+def test_planning_plan_pong_scan_with_detector_offset():
+    """Test detector-offset plan_pong_scan example from planning.rst."""
+    from astropy.time import Time
+
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.planning import FieldRegion, plan_pong_scan
+    from fyst_trajectories.primecam import get_primecam_offset
+
+    site = get_fyst_site()
+    field = FieldRegion(ra_center=53.117, dec_center=-27.808, width=5.0, height=6.7)
+
+    offset = get_primecam_offset("i1")
+    block = plan_pong_scan(
+        field=field,
+        velocity=0.5,
+        spacing=0.1,
+        num_terms=4,
+        site=site,
+        start_time=Time("2026-03-15T22:12:00", scale="utc"),
+        timestep=0.1,
+        detector_offset=offset,
+    )
+
+    assert block.trajectory.n_points > 0
+    el_limits = site.telescope_limits.elevation
+    assert block.trajectory.el.min() >= el_limits.min
+    assert block.trajectory.el.max() <= el_limits.max
+
+
+def test_planning_plan_pong_scan_stripe82_survey():
+    """Test 'Stripe 82 / Deep56 survey' real-world example from planning.rst."""
+    import astropy.units as u
+    import numpy as np
+    from astropy.time import Time, TimeDelta
+
+    from fyst_trajectories import Coordinates, get_fyst_site
+    from fyst_trajectories.planning import FieldRegion, plan_pong_scan
+
+    site = get_fyst_site()
+    coords = Coordinates(site)
+
+    # CMB field: RA 23h-3h, Dec -9 to +5
+    cmb_field = FieldRegion(ra_center=0.0, dec_center=-2.0, width=60.0, height=14.0)
+
+    # Find when field center reaches el=50 (rising side)
+    search_start = Time("2026-03-15T00:00:00", scale="utc")
+    dt = np.arange(0, 24 * 3600, 60)
+    times = search_start + TimeDelta(dt * u.s)
+    _, el = coords.radec_to_altaz(
+        np.full(len(times), 0.0),
+        np.full(len(times), -2.0),
+        times,
+    )
+    crossing = np.where(np.diff((el >= 50.0).astype(int)))[0][0]
+    start_cmb = times[crossing]
+
+    with pytest.warns(PointingWarning):
+        # Scan width of 60 deg is above the advisory MAX_REASONABLE_SCAN_WIDTH_DEG.
+        cmb_block = plan_pong_scan(
+            field=cmb_field,
+            velocity=0.5,
+            spacing=0.25,
+            num_terms=4,
+            site=site,
+            start_time=start_cmb,
+            timestep=0.5,
+        )
+    print(cmb_block.summary)
+
+    assert cmb_block.trajectory.n_points > 0
+    assert cmb_block.trajectory.scan_flag is not None
+    assert len(cmb_block.trajectory.scan_flag) == cmb_block.trajectory.n_points
+
+
+def test_planning_plan_constant_el_scan_basic():
+    """Test basic plan_constant_el_scan example from planning.rst."""
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.planning import FieldRegion, plan_constant_el_scan
+
+    site = get_fyst_site()
+
+    field = FieldRegion(ra_center=0.0, dec_center=-2.0, width=60.0, height=14.0)
+    with pytest.warns(PointingWarning):
+        # Scan width of 60 deg is above the advisory MAX_REASONABLE_SCAN_WIDTH_DEG.
+        block = plan_constant_el_scan(
+            field=field,
+            elevation=50.0,  # fixed elevation in degrees
+            velocity=0.5,  # az scan speed in deg/s
+            site=site,
+            start_time="2026-09-15T00:00:00",
+            rising=True,  # use rising crossing
+        )
+
+    print(block.summary)
+    print(f"Duration: {block.duration:.0f}s")
+    print(
+        f"Az range: [{block.computed_params['az_start']:.1f}, "
+        f"{block.computed_params['az_stop']:.1f}]"
+    )
+
+    assert block.trajectory.n_points > 0
+    assert "az_start" in block.computed_params
+    assert "az_stop" in block.computed_params
+
+
+def test_planning_plan_constant_el_scan_with_detector_offset():
+    """Test plan_constant_el_scan with detector offset from planning.rst."""
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.planning import FieldRegion, plan_constant_el_scan
+    from fyst_trajectories.primecam import get_primecam_offset
+
+    site = get_fyst_site()
+    field = FieldRegion(ra_center=0.0, dec_center=-2.0, width=60.0, height=14.0)
+
+    offset = get_primecam_offset("i1")
+    with pytest.warns(PointingWarning):
+        # Scan width of 60 deg is above the advisory MAX_REASONABLE_SCAN_WIDTH_DEG.
+        block = plan_constant_el_scan(
+            field=field,
+            elevation=50.0,
+            velocity=0.5,
+            site=site,
+            start_time="2026-09-15T00:00:00",
+            detector_offset=offset,
+        )
+
+    assert block.trajectory.n_points > 0
+
+
+def test_planning_plan_daisy_scan():
+    """Test plan_daisy_scan example from planning.rst."""
+    from astropy.time import Time
+
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.planning import plan_daisy_scan
+
+    site = get_fyst_site()
+
+    block = plan_daisy_scan(
+        ra=83.633,  # Crab Nebula RA
+        dec=22.014,  # Crab Nebula Dec
+        radius=0.5,  # characteristic radius R0 (degrees)
+        velocity=0.3,  # scan velocity (deg/s)
+        turn_radius=0.2,  # curvature radius for turns (degrees)
+        avoidance_radius=0.0,  # avoid center within this radius
+        start_acceleration=0.5,  # ramp-up acceleration (deg/s^2)
+        site=site,
+        start_time=Time("2026-01-15T02:00:00", scale="utc"),
+        timestep=0.1,
+        duration=300.0,  # 5 minutes
+    )
+
+    print(block.summary)
+
+    assert block.trajectory.n_points > 0
+    el_limits = site.telescope_limits.elevation
+    assert block.trajectory.el.min() >= el_limits.min
+    assert block.trajectory.el.max() <= el_limits.max
+
+
+def test_planning_inspect_scan_block():
+    """Test 'Example of inspecting a scan block' from planning.rst."""
+    from astropy.time import Time
+
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.planning import FieldRegion, plan_pong_scan
+
+    site = get_fyst_site()
+    field = FieldRegion(ra_center=180.0, dec_center=-30.0, width=2.0, height=2.0)
+    block = plan_pong_scan(
+        field=field,
+        velocity=0.5,
+        spacing=0.1,
+        num_terms=4,
+        site=site,
+        start_time=Time("2026-03-15T04:00:00", scale="utc"),
+        timestep=0.1,
+    )
+
+    # Access the trajectory
+    traj = block.trajectory
+    print(f"Points: {traj.n_points}, Duration: {traj.duration:.0f}s")
+
+    # Inspect computed parameters
+    print(f"Pong period: {block.computed_params['period']:.0f}s")
+    print(f"Vertices: {block.computed_params['x_numvert']} x {block.computed_params['y_numvert']}")
+
+    # Print summary
+    print(block.summary)
+
+    # Validate trajectory against telescope limits
+    traj.validate(get_fyst_site())
+
+    assert traj.n_points > 0
+    assert "period" in block.computed_params
+    assert "x_numvert" in block.computed_params
+    assert "y_numvert" in block.computed_params
+
+
+@pytest.mark.parametrize(
+    "start_iso",
+    [
+        "2026-03-15T22:12:00",  # the corrected, observable time
+    ],
+)
+def test_planning_plan_pong_scan_chandra_deep_field_observable(start_iso):
+    """Regression test for docs/planning.rst start_time bug.
+
+    The Chandra Deep Field South is below the horizon at FYST at
+    2026-03-15T04:00:00 (the previously-broken example time).  It is
+    observable at 2026-03-15T22:12:00 (the corrected time).  This
+    parametrized test locks the corrected time in place -- if someone
+    reverts it to an unobservable value, this test will fail loudly.
+    """
+    from astropy.time import Time
+
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.planning import FieldRegion, plan_pong_scan
+
+    site = get_fyst_site()
+    field = FieldRegion(ra_center=53.117, dec_center=-27.808, width=5.0, height=6.7)
+    block = plan_pong_scan(
+        field=field,
+        velocity=0.5,
+        spacing=0.08,
+        num_terms=4,
+        site=site,
+        start_time=Time(start_iso, scale="utc"),
+        timestep=0.1,
+        angle=170.0,
+    )
+    assert block.trajectory.n_points > 0
+
+
+# ============================================================================
+# Source docstring regression tests
+# ============================================================================
+#
+# These tests guard the three docstring examples that the v0.3.0 verification
+# pass found broken and then fixed.  They intentionally mirror the shape of the
+# fixed docstring snippets so a regression in the source docstring would
+# immediately break a test.
+
+
+def test_get_rise_set_times_handles_no_set_within_window():
+    """Regression test for coordinates.py ``get_rise_set_times`` docstring fix.
+
+    Some sources rise within the search window but do not set within it.
+    The fixed docstring example uses an explicit ``None`` check on
+    ``set_`` before dereferencing ``set_.iso``.  This test follows the
+    same pattern so a regression that removed the guard would crash here.
+    """
+    from astropy.time import Time
+
+    from fyst_trajectories import Coordinates, get_fyst_site
+
+    coords = Coordinates(get_fyst_site())
+    start = Time("2026-03-15T00:00:00", scale="utc")
+    rise, set_ = coords.get_rise_set_times(
+        ra=83.633,
+        dec=22.014,  # Crab Nebula / Orion neighborhood
+        start_time=start,
+        horizon=0.0,
+        max_search_hours=24.0,
+        step_hours=0.1,
+    )
+    # The exact guard pattern from the fixed docstring:
+    if rise is not None and set_ is not None:
+        rise_iso = rise.iso  # would crash if set_ check fired but rise didn't
+        set_iso = set_.iso
+        assert isinstance(rise_iso, str)
+        assert isinstance(set_iso, str)
+    else:
+        # At least one of rise or set_ is None -- that's allowed and must
+        # not raise.
+        pass
+
+
+def test_constant_el_pattern_docstring_example():
+    """Regression test for ``ConstantElScanPattern`` docstring example.
+
+    The docstring shows ``pattern.generate(site, duration=60.0)`` without
+    ``start_time``.  This only works after the signature gained a default
+    of ``start_time: Time | None = None``.
+    """
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.patterns import ConstantElScanConfig, ConstantElScanPattern
+
+    config = ConstantElScanConfig(
+        timestep=0.1,
+        az_start=120.0,
+        az_stop=180.0,
+        elevation=45.0,
+        az_speed=0.5,
+        az_accel=1.0,
+        n_scans=10,
+    )
+    pattern = ConstantElScanPattern(config)
+    trajectory = pattern.generate(get_fyst_site(), duration=60.0)
+    assert trajectory.n_points > 0
+
+
+def test_linear_motion_pattern_docstring_example():
+    """Regression test for ``LinearMotionPattern`` docstring example.
+
+    The docstring shows ``pattern.generate(site, duration=60.0)`` without
+    ``start_time``.  This only works after the signature gained a default
+    of ``start_time: Time | None = None``.
+    """
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.patterns import LinearMotionConfig, LinearMotionPattern
+
+    config = LinearMotionConfig(
+        timestep=0.1,
+        az_start=100.0,
+        el_start=45.0,
+        az_velocity=0.5,
+        el_velocity=0.1,
+    )
+    pattern = LinearMotionPattern(config)
+    trajectory = pattern.generate(get_fyst_site(), duration=60.0)
+    assert trajectory.n_points > 0

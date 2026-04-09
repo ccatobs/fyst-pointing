@@ -26,7 +26,9 @@ Pattern generation returns a ``Trajectory`` containing:
 - ``az``, ``el`` - Positions in degrees (numpy arrays)
 - ``az_vel``, ``el_vel`` - Velocities in deg/s (numpy arrays)
 - ``start_time`` - Absolute start (astropy Time)
-- ``pattern_type``, ``pattern_params`` - Metadata
+- ``scan_flag`` - Per-sample flags: 0=unclassified, 1=science, 2=turnaround, 3=retune
+- ``science_mask`` - Boolean property: True for science-quality samples
+- ``pattern_type``, ``pattern_params`` - Metadata (from ``TrajectoryMetadata``)
 - ``duration``, ``n_points`` - Computed properties
 
 **Export for OCS**::
@@ -361,13 +363,16 @@ executes::
     site = get_fyst_site()
     field = FieldRegion(ra_center=180.0, dec_center=-30.0, width=2.0, height=2.0)
 
+    from astropy.time import Time
+
     block = plan_pong_scan(
         field=field,
         velocity=0.5,
         spacing=0.1,
         num_terms=4,
+        timestep=0.1,
         site=site,
-        start_time="2026-03-15T04:00:00",
+        start_time=Time("2026-03-15T04:00:00", scale="utc"),
     )
 
     # Same trajectory object -- use for hitmap simulation

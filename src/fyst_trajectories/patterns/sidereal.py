@@ -65,7 +65,6 @@ class SiderealTrackPattern(CelestialPattern):
 
     @property
     def name(self) -> str:
-        """Return pattern identifier."""
         return "sidereal"
 
     def generate(

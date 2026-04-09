@@ -42,6 +42,7 @@ from astropy.time import Time
 from ..offsets import apply_detector_offset
 from ..site import AtmosphericConditions, Site
 from ..trajectory import Trajectory
+from ..trajectory_utils import validate_trajectory_bounds, validate_trajectory_dynamics
 from .base import AltAzPattern, CelestialPattern
 from .configs import CONFIG_TO_PATTERN, ScanConfig
 from .registry import get_pattern
@@ -308,11 +309,13 @@ class TrajectoryBuilder:
         self._detector_offset = offset
         return self
 
-    def _needs_start_time(self, pattern_cls: type) -> bool:
+    @staticmethod
+    def _needs_start_time(pattern_cls: type) -> bool:
         """Check if a pattern class requires a start time.
 
-        Celestial patterns need start_time for coordinate transforms
-        (RA/Dec -> AltAz). Planet tracking needs it for ephemeris lookup.
+        Uses the ``requires_start_time`` ClassVar declared on base classes.
+        CelestialPattern defaults to True, AltAzPattern defaults to False,
+        and PlanetTrackPattern overrides to True.
 
         Parameters
         ----------
@@ -324,13 +327,7 @@ class TrajectoryBuilder:
         bool
             True if the pattern requires a start time.
         """
-        if issubclass(pattern_cls, CelestialPattern):
-            return True
-        # PlanetTrackPattern extends AltAzPattern but needs start_time
-        # for ephemeris lookup (see planet.py docstring).
-        from .planet import PlanetTrackPattern  # pylint: disable=import-outside-toplevel
-
-        return issubclass(pattern_cls, PlanetTrackPattern)
+        return getattr(pattern_cls, "requires_start_time", False)
 
     def build(self) -> Trajectory:
         """Build the trajectory.
@@ -341,6 +338,16 @@ class TrajectoryBuilder:
         If a detector offset was specified via for_detector(), the
         trajectory positions are adjusted so the detector observes
         the target instead of the boresight.
+
+        After generating the trajectory (and applying any detector
+        offset), ``validate_trajectory_dynamics()`` is called
+        automatically to warn if velocity or acceleration limits
+        are exceeded, and ``validate_trajectory_bounds()`` is called
+        as a defence-in-depth check that the final trajectory is
+        within telescope position limits.  Pattern modules already
+        validate their own bounds; this extra call catches any
+        out-of-bounds positions introduced by detector offsets or
+        future changes to pattern generators.
 
         Returns
         -------
@@ -402,14 +409,21 @@ class TrajectoryBuilder:
             atmosphere=self._atmosphere,
         )
 
-        if trajectory.metadata is None:
-            trajectory.metadata = pattern.get_metadata()
-
         if self._detector_offset is not None:
             trajectory = apply_detector_offset(
                 trajectory,
                 self._detector_offset,
                 self._site,
             )
+
+        # Validate dynamics after detector offset so the check covers
+        # the actual trajectory the telescope will execute.
+        validate_trajectory_dynamics(self._site, trajectory.az, trajectory.el, trajectory.times)
+
+        # Defence in depth: patterns already validate their own bounds,
+        # but applying a detector offset can push points past telescope
+        # limits.  Re-validate the final trajectory here so the builder
+        # refuses to hand off an infeasible path to the caller.
+        validate_trajectory_bounds(self._site, trajectory.az, trajectory.el)
 
         return trajectory

@@ -80,10 +80,8 @@ def normalize_azimuth(
     """
     limits = site.telescope_limits
 
-    # Unwrap to remove 360-degree discontinuities, preserving continuity
     az_unwrapped = np.unwrap(az, period=360.0)
 
-    # Check if trajectory span exceeds the telescope range
     az_span = float(az_unwrapped.max() - az_unwrapped.min())
     telescope_range = limits.azimuth.max - limits.azimuth.min
     if az_span > telescope_range:
@@ -97,13 +95,25 @@ def normalize_azimuth(
             stacklevel=2,
         )
 
-    # Find the shift (multiple of 360) that places the trajectory midpoint
-    # closest to the center of the allowed range
     az_mid = (az_unwrapped.min() + az_unwrapped.max()) / 2.0
     range_center = (limits.azimuth.min + limits.azimuth.max) / 2.0
     shift = round((range_center - az_mid) / 360.0) * 360.0
 
-    return az_unwrapped + shift
+    shifted = az_unwrapped + shift
+
+    # Verify shifted range is within telescope limits.
+    shifted_min = float(shifted.min())
+    shifted_max = float(shifted.max())
+    if shifted_min < limits.azimuth.min or shifted_max > limits.azimuth.max:
+        warnings.warn(
+            f"Shifted azimuth [{shifted_min:.1f}, {shifted_max:.1f}] exceeds "
+            f"telescope limits [{limits.azimuth.min}, {limits.azimuth.max}]. "
+            f"validate_trajectory_bounds will report the violation.",
+            PointingWarning,
+            stacklevel=2,
+        )
+
+    return shifted
 
 
 def compute_velocities(
@@ -150,7 +160,6 @@ def compute_velocities(
     >>> # Returns velocities near 1.5 deg/s (correct), not -178.5 deg/s (wrong)
     """
     if is_angular:
-        # Unwrap to handle 359->1 degree transitions correctly
         positions = np.unwrap(positions, period=360.0)
     return np.gradient(positions, times)
 

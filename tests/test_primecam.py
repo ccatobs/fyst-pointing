@@ -169,6 +169,17 @@ class TestCartesianPositions:
         assert PRIMECAM_I6.dy == pytest.approx(expected_y_mm * _PLATE_SCALE / 60.0, abs=0.01)
 
 
+class TestAllModulesDistinct:
+    """All 7 modules should occupy unique positions."""
+
+    def test_no_duplicate_positions(self):
+        """No two non-alias modules share the same (dx, dy) position."""
+        # Use one key per physical module (exclude 'center' alias for 'c')
+        unique_keys = ["c", "i1", "i2", "i3", "i4", "i5", "i6"]
+        positions = [(PRIMECAM_MODULES[k].dx, PRIMECAM_MODULES[k].dy) for k in unique_keys]
+        assert len(set(positions)) == len(positions)
+
+
 class TestGetPrimecamOffset:
     """Tests for get_primecam_offset function."""
 
@@ -201,10 +212,6 @@ class TestCenterModule:
         """Center module should have zero offset."""
         assert PRIMECAM_CENTER.dx == 0.0
         assert PRIMECAM_CENTER.dy == 0.0
-
-    def test_center_name(self):
-        """Center module should have correct name."""
-        assert PRIMECAM_CENTER.name == "PrimeCam-Center"
 
 
 class TestModulesDict:

@@ -5,6 +5,7 @@ Trajectory objects. These are the primary API. The corresponding
 methods on Trajectory delegate here.
 """
 
+import dataclasses
 import sys
 import warnings
 from typing import TYPE_CHECKING, Any, TextIO
@@ -19,6 +20,7 @@ from .exceptions import (
     PointingWarning,
 )
 from .site import Site
+from .trajectory import SCAN_FLAG_RETUNE, SCAN_FLAG_SCIENCE, SCAN_FLAG_TURNAROUND
 
 if TYPE_CHECKING:
     from .coordinates import Coordinates
@@ -153,6 +155,23 @@ def validate_trajectory_dynamics(
             stacklevel=2,
         )
 
+    # Advisory: check if cos(el) scaling makes coordinate velocity misleading.
+    # At high elevation, small on-sky motions require large az coordinate rates.
+    cos_el = np.cos(np.radians(el))
+    min_cos_el = cos_el.min()
+    if min_cos_el > 0 and max_az_vel > 0:
+        on_sky_az_vel = np.abs(az_vel) * cos_el
+        max_on_sky = on_sky_az_vel.max()
+        # Warn when coordinate velocity exceeds on-sky by >2x (el > ~60 deg)
+        if max_az_vel > 2.0 * max_on_sky:
+            warnings.warn(
+                f"High elevation reduces on-sky azimuth speed to "
+                f"{max_on_sky:.2f} deg/s (coordinate: {max_az_vel:.2f} deg/s, "
+                f"min cos(el)={min_cos_el:.3f}). Verify scan design is appropriate.",
+                PointingWarning,
+                stacklevel=2,
+            )
+
     az_accel = np.gradient(az_vel, times)
     el_accel = np.gradient(el_vel, times)
 
@@ -212,8 +231,7 @@ def validate_trajectory(
         trajectory point is within the sun exclusion or warning radius.
     """
     validate_trajectory_bounds(site, trajectory.az, trajectory.el)
-    if trajectory.times is not None:
-        validate_trajectory_dynamics(site, trajectory.az, trajectory.el, trajectory.times)
+    validate_trajectory_dynamics(site, trajectory.az, trajectory.el, trajectory.times)
     if check_sun and trajectory.start_time is not None:
         abs_times = get_absolute_times(trajectory)
         validate_sun_avoidance(site, trajectory.az, trajectory.el, abs_times)
@@ -300,8 +318,6 @@ def validate_sun_avoidance(
     if n_points == 0:
         return
 
-    # Determine subsampling interval: check every ~60 seconds.
-    # Compute time span to decide step.
     if isinstance(times, Time):
         total_seconds = (times[-1] - times[0]).to_value(u.s)
     else:
@@ -314,7 +330,6 @@ def validate_sun_avoidance(
         step = max(1, int(subsample_interval * n_points / total_seconds))
 
     sample_indices = np.arange(0, n_points, step)
-    # Always include the last point
     if sample_indices[-1] != n_points - 1:
         sample_indices = np.append(sample_indices, n_points - 1)
 
@@ -322,12 +337,10 @@ def validate_sun_avoidance(
     sample_az = az[sample_indices]
     sample_el = el[sample_indices]
 
-    # Compute sun position at all sampled times in one vectorised call
     sun_az, sun_alt = coords.get_sun_altaz(sample_times)
     sun_az = np.atleast_1d(sun_az)
     sun_alt = np.atleast_1d(sun_alt)
 
-    # Vectorised angular separation (Vincenty formula on the sphere)
     az1 = np.deg2rad(sample_az)
     el1 = np.deg2rad(sample_el)
     az2 = np.deg2rad(sun_az)
@@ -427,10 +440,6 @@ def to_path_format(trajectory: "Trajectory") -> list[list[float]]:
     ).tolist()
 
 
-# plot_trajectory lives in this module alongside validation and export
-# functions for discoverability -- trajectory-related utilities in one
-# place.  For multi-detector hit-density plots, see
-# fyst_trajectories.plotting.plot_hit_map.
 def plot_trajectory(trajectory: "Trajectory", show: bool) -> Any:
     """Plot trajectory az/el vs time and sky track.
 
@@ -486,6 +495,162 @@ def plot_trajectory(trajectory: "Trajectory", show: bool) -> Any:
         plt.show()
 
     return fig
+
+
+def inject_retune(
+    trajectory: "Trajectory",
+    retune_interval: float = 300.0,
+    retune_duration: float = 5.0,
+    prefer_turnarounds: bool = False,
+    turnaround_window: float = 5.0,
+    module_index: int = 0,
+    n_modules: int = 1,
+) -> "Trajectory":
+    """Inject retune flags into a trajectory at regular intervals.
+
+    Walks forward through the trajectory timeline and places retune events
+    every ``retune_interval`` seconds. If ``prefer_turnarounds`` is True and
+    a turnaround region exists within ``turnaround_window`` seconds of the
+    due time, the retune is snapped to start at the turnaround (zero
+    additional dead time). Otherwise the retune is placed at the time-based
+    position.
+
+    The default is ``prefer_turnarounds=False`` (time-based placement),
+    which produces uniform coverage. Set to True to snap retunes to nearby
+    turnarounds, which saves ~0.04% science time but concentrates gaps at
+    turnaround positions, creating persistent coverage non-uniformity.
+
+    Only samples with ``SCAN_FLAG_SCIENCE`` are overwritten with
+    ``SCAN_FLAG_RETUNE``; turnaround flags are never modified.
+
+    **Per-module staggered retune** (UNCONFIRMED -- needs FYST team
+    verification): Prime-Cam has 7 independent readout modules. If modules
+    can retune independently, setting ``n_modules > 1`` offsets the first
+    retune by ``module_index * retune_interval / n_modules``, so only one
+    module is retuning at any given time. This reduces effective overhead
+    from ~16% to ~2.4% for 7 modules. Set ``n_modules=1`` (the default)
+    to disable staggering and retune all modules simultaneously.
+
+    Parameters
+    ----------
+    trajectory : Trajectory
+        Input trajectory with scan_flag array.
+    retune_interval : float
+        Seconds between retune events (from last retune or start).
+        Default 300s (5 min) is preliminary, based on NIKA2 heritage
+        where KIDs retune at sub-scan boundaries. Optimal value depends
+        on Prime-Cam detector stability under varying atmospheric load;
+        validate with commissioning data.
+    retune_duration : float
+        Duration in seconds of each retune event.
+    prefer_turnarounds : bool
+        If True, snap retunes to nearby turnarounds when possible.
+        Default is False (time-based placement for uniform coverage).
+    turnaround_window : float
+        Maximum seconds from due time to search for a turnaround start.
+    module_index : int
+        Index of this module (0-based) for staggered retune scheduling.
+        Default is 0. Only meaningful when ``n_modules > 1``.
+    n_modules : int
+        Total number of independent modules. Default is 1 (no staggering,
+        all modules retune simultaneously -- current behavior). Set to 7
+        for Prime-Cam staggered retune.
+
+    Returns
+    -------
+    Trajectory
+        New trajectory with retune samples flagged.
+
+    Raises
+    ------
+    ValueError
+        If ``module_index`` is negative or >= ``n_modules``, or if
+        ``n_modules`` is less than 1.
+    """
+    if retune_interval <= 0:
+        raise ValueError(f"retune_interval must be positive, got {retune_interval}")
+    if retune_duration <= 0:
+        raise ValueError(f"retune_duration must be positive, got {retune_duration}")
+    if n_modules < 1:
+        raise ValueError(f"n_modules must be >= 1, got {n_modules}")
+    if module_index < 0 or module_index >= n_modules:
+        raise ValueError(f"module_index must be in [0, {n_modules}), got {module_index}")
+
+    # N-6 defensive guard: turnaround detection relies on real velocities
+    # (see inject_retune body below, which classifies turnarounds via
+    # ``SCAN_FLAG_TURNAROUND`` samples derived from the trajectory's
+    # velocity profile). A trajectory with identically zero az/el
+    # velocities -- which the primecam wrapper currently supplies -- has no
+    # detectable turnarounds, so snapping would silently collapse to
+    # time-based placement anyway. Warn and fall back explicitly so the
+    # caller is not misled.
+    if prefer_turnarounds:
+        if (
+            trajectory.az_vel is not None
+            and trajectory.el_vel is not None
+            and np.all(trajectory.az_vel == 0.0)
+            and np.all(trajectory.el_vel == 0.0)
+        ):
+            warnings.warn(
+                "inject_retune called with prefer_turnarounds=True but the "
+                "trajectory has all-zero velocities; turnaround detection "
+                "requires real velocities. Falling back to time-based retune "
+                "placement.",
+                PointingWarning,
+                stacklevel=2,
+            )
+            prefer_turnarounds = False
+
+    times = trajectory.times
+
+    if trajectory.scan_flag is None:
+        scan_flag = np.full(len(times), SCAN_FLAG_SCIENCE, dtype=int)
+    else:
+        scan_flag = trajectory.scan_flag.copy()
+
+    duration = float(times[-1] - times[0])
+    if duration < retune_interval:
+        return dataclasses.replace(trajectory, scan_flag=scan_flag)
+
+    turnaround_starts: list[float] = []
+    if prefer_turnarounds:
+        is_turnaround = scan_flag == SCAN_FLAG_TURNAROUND
+        for i in range(len(is_turnaround)):
+            if is_turnaround[i] and (i == 0 or not is_turnaround[i - 1]):
+                turnaround_starts.append(float(times[i]))
+
+    # For staggered retune, offset the first retune time by a fraction
+    # of the retune interval so different modules retune at different times.
+    stagger_offset = module_index * retune_interval / n_modules
+    last_retune_time = float(times[0]) + stagger_offset
+
+    while True:
+        due_time = last_retune_time + retune_interval
+        if due_time > float(times[-1]):
+            break
+
+        retune_start = due_time
+        if prefer_turnarounds and turnaround_starts:
+            best_ta = None
+            best_dist = turnaround_window + 1.0
+            for ta_start in turnaround_starts:
+                dist = abs(ta_start - due_time)
+                if dist <= turnaround_window and dist < best_dist:
+                    best_ta = ta_start
+                    best_dist = dist
+            if best_ta is not None:
+                retune_start = best_ta
+
+        retune_end = retune_start + retune_duration
+
+        mask = (times >= retune_start) & (times < retune_end) & (scan_flag == SCAN_FLAG_SCIENCE)
+        scan_flag[mask] = SCAN_FLAG_RETUNE
+
+        # Use max(retune_end, due_time) to prevent backward drift when
+        # prefer_turnarounds snaps to a turnaround before the due time.
+        last_retune_time = max(retune_end, due_time)
+
+    return dataclasses.replace(trajectory, scan_flag=scan_flag)
 
 
 def _format_trajectory(

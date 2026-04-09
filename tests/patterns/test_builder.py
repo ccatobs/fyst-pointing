@@ -3,6 +3,7 @@
 import pytest
 from astropy.time import Time
 
+from fyst_trajectories.exceptions import AzimuthBoundsError, ElevationBoundsError
 from fyst_trajectories.patterns import (
     ConstantElScanConfig,
     DaisyScanConfig,
@@ -242,3 +243,70 @@ class TestTrajectoryBuilder:
 
         assert trajectory.n_points > 0
         assert trajectory.pattern_type == "constant_el"
+
+
+class TestBuilderBoundsValidation:
+    """Arch-12: builder must re-validate trajectory bounds after generation.
+
+    Individual patterns already validate their own bounds, so the
+    builder's call is defence in depth. These tests neutralise the
+    per-pattern bounds check and verify that the builder still refuses
+    to emit an out-of-bounds trajectory.
+    """
+
+    def test_build_raises_when_azimuth_exceeds_limits(self, site, monkeypatch):
+        """Builder must raise if a trajectory slips past the pattern's bounds check."""
+        # Configure a constant-el scan whose azimuth range exceeds the
+        # FYST azimuth limit (az_max=360). Ordinarily the pattern's own
+        # validate_trajectory_bounds call would raise, so we neutralise
+        # it inside the pattern module only. The builder imports its
+        # own reference to validate_trajectory_bounds from
+        # trajectory_utils, which is unaffected.
+        from fyst_trajectories.patterns import constant_el as ce_module
+
+        monkeypatch.setattr(ce_module, "validate_trajectory_bounds", lambda *a, **k: None)
+
+        bad_config = ConstantElScanConfig(
+            timestep=0.1,
+            az_start=355.0,
+            az_stop=400.0,  # > FYST_AZ_MAX (360)
+            elevation=45.0,
+            az_speed=1.0,
+            az_accel=0.5,
+            n_scans=1,
+        )
+
+        builder = TrajectoryBuilder(site).with_config(bad_config).duration(30.0)
+
+        with pytest.raises(AzimuthBoundsError):
+            builder.build()
+
+    def test_build_raises_when_elevation_exceeds_limits(self, site, monkeypatch):
+        """Builder must raise if the final trajectory elevation is out of range."""
+        from fyst_trajectories.patterns import constant_el as ce_module
+
+        monkeypatch.setattr(ce_module, "validate_trajectory_bounds", lambda *a, **k: None)
+
+        # Elevation 95 degrees is above FYST_EL_MAX (90 deg).
+        bad_config = ConstantElScanConfig(
+            timestep=0.1,
+            az_start=100.0,
+            az_stop=150.0,
+            elevation=95.0,
+            az_speed=1.0,
+            az_accel=0.5,
+            n_scans=1,
+        )
+
+        builder = TrajectoryBuilder(site).with_config(bad_config).duration(30.0)
+
+        with pytest.raises(ElevationBoundsError):
+            builder.build()
+
+    def test_build_succeeds_for_in_bounds_trajectory(self, site):
+        """Valid in-bounds configs must still build without raising."""
+        # Sanity check: the new bounds re-validation must not regress the
+        # happy path. Uses the reusable in-bounds config from the top of
+        # this module.
+        trajectory = TrajectoryBuilder(site).with_config(_CONST_EL_CONFIG).duration(30.0).build()
+        assert trajectory.n_points > 0

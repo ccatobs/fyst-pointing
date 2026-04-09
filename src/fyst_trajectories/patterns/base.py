@@ -1,15 +1,16 @@
-"""Base classes and protocols for scan patterns.
+"""Base classes for scan patterns.
 
 This module defines:
-- ScanPattern: Protocol that all patterns implement
-- CelestialPattern: Base for RA/Dec centered patterns
-- AltAzPattern: Base for native AltAz patterns
-- TrajectoryMetadata: Optional trajectory metadata container
+
+- ``ScanPattern``: the interface that all patterns implement
+- ``CelestialPattern``: base for RA/Dec centered patterns
+- ``AltAzPattern``: base for native AltAz patterns
+- ``TrajectoryMetadata``: optional trajectory metadata container
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from astropy.time import Time
 
@@ -21,9 +22,8 @@ from ..trajectory import Trajectory
 class TrajectoryMetadata:
     """Metadata about how a trajectory was generated.
 
-    This is stored separately from the core Trajectory data to keep
-    the Trajectory class lean. Attach this when you need to preserve
-    information about the pattern configuration.
+    Attached to a :class:`Trajectory` when you need to preserve the
+    pattern type and the parameters it was built from.
 
     Parameters
     ----------
@@ -57,16 +57,14 @@ class TrajectoryMetadata:
 
 @runtime_checkable
 class ScanPattern(Protocol):
-    """Protocol defining the interface for all scan patterns.
+    """Interface that all scan patterns implement.
 
-    Any class that implements these methods/properties can be used
-    as a scan pattern, enabling duck typing while still providing
-    type checking support.
+    Any class that implements these methods and properties can be used
+    as a scan pattern:
 
-    All scan patterns must implement:
-    - name property: unique identifier for the pattern type
-    - generate method: creates a Trajectory for the pattern
-    - get_metadata method: returns TrajectoryMetadata for the pattern
+    - ``name`` property: unique identifier for the pattern type
+    - ``generate`` method: creates a Trajectory for the pattern
+    - ``get_metadata`` method: returns TrajectoryMetadata for the pattern
     """
 
     @property
@@ -138,7 +136,11 @@ class CelestialPattern(ABC):
         Right Ascension of pattern center in degrees.
     dec : float
         Declination of pattern center in degrees.
+    requires_start_time : bool
+        Always True for celestial patterns (coordinate transforms need time).
     """
+
+    requires_start_time: ClassVar[bool] = True
 
     def __init__(self, ra: float, dec: float):
         self.ra = ra
@@ -201,7 +203,15 @@ class AltAzPattern(ABC):
     system without requiring coordinate transformations.
 
     Examples: ConstantElScan, LinearMotion
+
+    Attributes
+    ----------
+    requires_start_time : bool
+        False by default for AltAz patterns. Override to True for
+        patterns that need start_time (e.g., PlanetTrackPattern).
     """
+
+    requires_start_time: ClassVar[bool] = False
 
     @property
     @abstractmethod

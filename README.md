@@ -8,7 +8,7 @@ Trajectory generation library for the Fred Young Submillimeter Telescope (FYST).
 pip install "fyst-trajectories @ git+https://github.com/ccatobs/fyst-trajectories.git"
 ```
 
-[PENDING] For usage documentation, see [fyst-trajectories.readthedocs.io](https://fyst-trajectories.readthedocs.io/).
+Documentation: forthcoming at [fyst-trajectories.readthedocs.io](https://fyst-trajectories.readthedocs.io/) (not yet live).
 
 ## Development
 

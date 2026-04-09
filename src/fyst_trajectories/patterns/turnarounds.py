@@ -40,7 +40,7 @@ def quintic_turnaround(
     velocity : np.ndarray
         Velocity at each time point.
     """
-    tau = t / T
+    tau = np.clip(t / T, 0.0, 1.0)
     tau2 = tau * tau
     tau3 = tau2 * tau
 

@@ -233,7 +233,6 @@ class DaisyScanPattern(CelestialPattern):
 
     @property
     def name(self) -> str:
-        """Return pattern identifier."""
         return "daisy"
 
     def generate_offsets(self, duration: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

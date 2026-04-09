@@ -1,7 +1,7 @@
 fyst-trajectories
 ==================
 
-Pointing and trajectory generation for the FYST (Fred Young Submillimeter
+Trajectory generation for the FYST (Fred Young Submillimeter
 Telescope).  Wraps astropy with FYST-specific site coordinates, telescope
 limits, and scan pattern generators.
 
@@ -16,6 +16,15 @@ limits, and scan pattern generators.
    instrument_offsets
    planning
    api/index
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Overhead Modeling:
+
+   overhead_quickstart
+   overhead_timeline
+   overhead_model
+   overhead_io
 
 Indices and tables
 ==================

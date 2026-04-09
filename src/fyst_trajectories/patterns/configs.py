@@ -1,10 +1,9 @@
-"""Configuration dataclasses for scan patterns.
+"""Configuration objects for scan patterns.
 
 Each scan pattern has an associated config class that holds its
-parameters. All configs inherit from ScanConfig which provides
-the common timestep parameter.
-
-All config classes are frozen (immutable) after creation.
+parameters. All configs inherit from :class:`ScanConfig`, which
+provides the common ``timestep`` parameter. Config instances are
+immutable after creation.
 """
 
 import warnings
@@ -14,14 +13,8 @@ from typing import ClassVar
 from ..coordinates import SOLAR_SYSTEM_BODIES
 from ..exceptions import PointingWarning
 
-# ---------------------------------------------------------------------------
-# Soft validation thresholds
-#
-# These are advisory upper bounds used to emit PointingWarning when a
-# parameter value looks unusually large.  They are NOT hard telescope
-# limits (those live in Site.telescope_limits, built from site.py constants).
-# Exceeding these values is allowed. The warning is informational only.
-# ---------------------------------------------------------------------------
+# Advisory upper bounds -- NOT hard telescope limits (those live in
+# Site.telescope_limits). Exceeding these values emits PointingWarning.
 MAX_REASONABLE_SCAN_WIDTH_DEG: float = 30.0
 """Maximum scan width/height (or azimuth throw) before a warning is issued."""
 
@@ -53,7 +46,6 @@ class ScanConfig:
     timestep: float
 
     def __post_init__(self) -> None:
-        """Validate configuration parameters."""
         if self.timestep <= 0:
             raise ValueError(f"timestep must be positive, got {self.timestep}")
 
@@ -99,8 +91,6 @@ class ConstantElScanConfig(ScanConfig):
     n_scans: int
 
     def __post_init__(self) -> None:
-        """Validate constant elevation scan parameters."""
-        # Call parent validation
         super().__post_init__()
         if self.az_speed <= 0:
             raise ValueError(f"az_speed must be positive, got {self.az_speed}")
@@ -127,6 +117,15 @@ class ConstantElScanConfig(ScanConfig):
             warnings.warn(
                 f"Azimuth acceleration {self.az_accel} deg/s^2 is unusually high "
                 f"(> {MAX_REASONABLE_ACCELERATION_DEG_S2} deg/s^2).",
+                PointingWarning,
+                stacklevel=2,
+            )
+        d_half_turn = 5 * self.az_speed**2 / (8 * self.az_accel)
+        if d_half_turn > az_throw:
+            warnings.warn(
+                f"Turnaround distance ({d_half_turn:.1f} deg) exceeds science throw "
+                f"({az_throw:.1f} deg). The telescope will spend most of its time "
+                f"in turnarounds. Consider increasing az_accel or decreasing az_speed.",
                 PointingWarning,
                 stacklevel=2,
             )
@@ -185,7 +184,6 @@ class PongScanConfig(ScanConfig):
     angle: float
 
     def __post_init__(self) -> None:
-        """Validate pong scan parameters."""
         super().__post_init__()
         if self.width <= 0:
             raise ValueError(f"width must be positive, got {self.width}")
@@ -274,7 +272,6 @@ class DaisyScanConfig(ScanConfig):
     y_offset: float
 
     def __post_init__(self) -> None:
-        """Validate daisy scan parameters."""
         super().__post_init__()
         if self.radius <= 0:
             raise ValueError(f"radius must be positive, got {self.radius}")
@@ -350,7 +347,6 @@ class PlanetTrackConfig(ScanConfig):
     body: str
 
     def __post_init__(self) -> None:
-        """Validate planet tracking parameters."""
         super().__post_init__()
         if self.body.lower() not in SOLAR_SYSTEM_BODIES:
             raise ValueError(f"Unknown body '{self.body}'. Valid: {sorted(SOLAR_SYSTEM_BODIES)}")

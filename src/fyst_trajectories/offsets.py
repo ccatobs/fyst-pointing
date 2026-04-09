@@ -159,7 +159,6 @@ class InstrumentOffset:
         )
 
     def __repr__(self) -> str:
-        """Return string representation of the offset."""
         name_str = f", name='{self.name}'" if self.name else ""
         rot_str = (
             f", instrument_rotation={self.instrument_rotation}°"
@@ -226,8 +225,6 @@ def _offset_forward(
 
     rho = np.sqrt(dx_rad**2 + dy_rad**2)
 
-    # sinc_rho = sin(rho) / rho, with safe handling for rho near zero.
-    # Use np.where with out parameter to avoid evaluating division at zero.
     safe_rho = np.where(rho < 1e-15, 1.0, rho)
     sinc_rho = np.where(rho < 1e-15, 1.0, np.sin(safe_rho) / safe_rho)
 
@@ -236,15 +233,10 @@ def _offset_forward(
     cos_el = np.cos(el_rad)
     cos_rho = np.cos(rho)
 
-    # Elevation component: sin(rho)*cos(phi) = dy_rad * sinc_rho * rho / rho
-    # Simplified: sin(rho)*cos(phi) = dy_rad * sinc_rho (since phi = atan2(dx,dy))
-    # More precisely: sin(rho)*cos(phi) = dy_rad * (sin(rho)/rho)
     sin_new_el = sin_el * cos_rho + cos_el * dy_rad * sinc_rho
-    # Clamp to [-1, 1] to avoid numerical issues with arcsin
     sin_new_el = np.clip(sin_new_el, -1.0, 1.0)
     new_el_rad = np.arcsin(sin_new_el)
 
-    # Azimuth component: sin(rho)*sin(phi) = dx_rad * sinc_rho
     delta_az_rad = np.arctan2(
         dx_rad * sinc_rho,
         cos_el * cos_rho - sin_el * dy_rad * sinc_rho,
@@ -296,13 +288,8 @@ def _offset_inverse(
     1e-12 degrees (~3.6 microarcsec). A ``RuntimeError`` is raised
     if the residual exceeds 1e-6 degrees after all iterations.
     """
-    # Initial estimate: apply forward formula with negated offsets
     bore_az, bore_el = _offset_forward(det_az, det_el, -dx_rot_deg, -dy_rot_deg)
 
-    # Newton refinement iterations. Each iteration computes the forward
-    # transform from the current estimate and applies the residual as a
-    # correction. Early exit at 1e-12 deg; raises RuntimeError if the
-    # residual exceeds 1e-6 deg after all iterations.
     _EARLY_EXIT_THRESHOLD = 1e-12  # degrees (~3.6 microarcsec)
     _FAILURE_THRESHOLD = 1e-6  # degrees (~3.6 arcsec)
     _MAX_ITERATIONS = 20
@@ -326,6 +313,34 @@ def _offset_inverse(
             )
 
     return bore_az, bore_el
+
+
+def _rotate_offset(
+    offset: InstrumentOffset,
+    field_rotation: float | np.ndarray,
+) -> tuple[float | np.ndarray, float | np.ndarray]:
+    """Rotate offset by field rotation angle.
+
+    Parameters
+    ----------
+    offset : InstrumentOffset
+        Detector offset from boresight.
+    field_rotation : float or array
+        Field rotation angle in degrees.
+
+    Returns
+    -------
+    dx_rot : float or array
+        Rotated cross-elevation offset in degrees.
+    dy_rot : float or array
+        Rotated elevation offset in degrees.
+    """
+    dx_deg = offset.dx_deg
+    dy_deg = offset.dy_deg
+    rot_rad = np.deg2rad(field_rotation)
+    cos_rot = np.cos(rot_rad)
+    sin_rot = np.sin(rot_rad)
+    return dx_deg * cos_rot - dy_deg * sin_rot, dx_deg * sin_rot + dy_deg * cos_rot
 
 
 def boresight_to_detector(
@@ -370,16 +385,7 @@ def boresight_to_detector(
     >>> det_az, det_el = boresight_to_detector(180.0, 45.0, offset, field_rotation=0.0)
     >>> print(f"Detector at Az={det_az:.3f}, El={det_el:.3f}")
     """
-    dx_deg = offset.dx_deg
-    dy_deg = offset.dy_deg
-
-    rot_rad = np.deg2rad(field_rotation)
-    cos_rot = np.cos(rot_rad)
-    sin_rot = np.sin(rot_rad)
-
-    dx_rot = dx_deg * cos_rot - dy_deg * sin_rot
-    dy_rot = dx_deg * sin_rot + dy_deg * cos_rot
-
+    dx_rot, dy_rot = _rotate_offset(offset, field_rotation)
     det_az, det_el = _offset_forward(az, el, dx_rot, dy_rot)
 
     if np.isscalar(az) and np.isscalar(el) and np.isscalar(field_rotation):
@@ -430,17 +436,7 @@ def detector_to_boresight(
     >>> assert abs(det_az2 - 180.0) < 1e-6
     >>> assert abs(det_el2 - 45.0) < 1e-6
     """
-    dx_deg = offset.dx_deg
-    dy_deg = offset.dy_deg
-
-    # Same rotation as forward transform
-    rot_rad = np.deg2rad(field_rotation)
-    cos_rot = np.cos(rot_rad)
-    sin_rot = np.sin(rot_rad)
-
-    dx_rot = dx_deg * cos_rot - dy_deg * sin_rot
-    dy_rot = dx_deg * sin_rot + dy_deg * cos_rot
-
+    dx_rot, dy_rot = _rotate_offset(offset, field_rotation)
     bore_az, bore_el = _offset_inverse(det_az, det_el, dx_rot, dy_rot)
 
     if np.isscalar(det_az) and np.isscalar(det_el) and np.isscalar(field_rotation):
@@ -596,8 +592,6 @@ def apply_detector_offset(
     if trajectory.start_time is None:
         raise ValueError("Trajectory must have start_time set for field rotation calculation")
 
-    # Early exit: zero offset with zero instrument rotation is a no-op.
-    # Return a shallow copy to avoid aliasing mutable arrays.
     if offset.dx == 0.0 and offset.dy == 0.0 and offset.instrument_rotation == 0.0:
         return Trajectory(
             times=trajectory.times.copy(),
@@ -616,18 +610,14 @@ def apply_detector_offset(
 
     abs_times = trajectory.get_absolute_times()
 
-    # Mechanical rotation: always available from elevation
     mechanical_rotation = site.nasmyth_sign * trajectory.el + offset.instrument_rotation
 
     if trajectory.center_ra is not None and trajectory.center_dec is not None:
-        # Celestial patterns: add parallactic angle for full accuracy
         ra_arr = np.full(len(trajectory.times), trajectory.center_ra)
         dec_arr = np.full(len(trajectory.times), trajectory.center_dec)
         pa = coords.get_parallactic_angle(ra_arr, dec_arr, obstime=abs_times)
         field_rotation = mechanical_rotation + pa
     else:
-        # AltAz/planet patterns: mechanical rotation only
-        # This is physically correct per NIKA2/KOSMA models
         warnings.warn(
             "Parallactic angle unavailable (no RA/Dec in trajectory metadata). "
             "Using mechanical rotation only "
@@ -648,8 +638,6 @@ def apply_detector_offset(
         field_rotation,
     )
 
-    # Numerical differentiation required as offset transformation is nonlinear,
-    # so original analytical velocities don't apply after the spherical offset.
     az_vel = np.gradient(bore_az, trajectory.times)
     el_vel = np.gradient(bore_el, trajectory.times)
 

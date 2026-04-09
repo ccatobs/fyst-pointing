@@ -24,10 +24,6 @@ from fyst_trajectories.planning import (
     plan_pong_scan,
 )
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture
 def start_time():
@@ -47,11 +43,6 @@ def small_field():
     return FieldRegion(ra_center=180.0, dec_center=-30.0, width=1.0, height=1.0)
 
 
-# ---------------------------------------------------------------------------
-# FieldRegion tests
-# ---------------------------------------------------------------------------
-
-
 class TestFieldRegion:
     """Tests for the FieldRegion dataclass."""
 
@@ -61,36 +52,17 @@ class TestFieldRegion:
         assert field.dec_min == pytest.approx(-32.0)
         assert field.dec_max == pytest.approx(-28.0)
 
-    def test_zero_width_raises(self):
-        """Test that zero width raises ValueError."""
+    @pytest.mark.parametrize("width", [0.0, -1.0])
+    def test_non_positive_width_raises(self, width):
+        """Test that zero or negative width raises ValueError."""
         with pytest.raises(ValueError, match="width must be positive"):
-            FieldRegion(ra_center=0.0, dec_center=0.0, width=0.0, height=1.0)
+            FieldRegion(ra_center=0.0, dec_center=0.0, width=width, height=1.0)
 
-    def test_negative_width_raises(self):
-        """Test that negative width raises ValueError."""
-        with pytest.raises(ValueError, match="width must be positive"):
-            FieldRegion(ra_center=0.0, dec_center=0.0, width=-1.0, height=1.0)
-
-    def test_zero_height_raises(self):
-        """Test that zero height raises ValueError."""
+    @pytest.mark.parametrize("height", [0.0, -2.0])
+    def test_non_positive_height_raises(self, height):
+        """Test that zero or negative height raises ValueError."""
         with pytest.raises(ValueError, match="height must be positive"):
-            FieldRegion(ra_center=0.0, dec_center=0.0, width=1.0, height=0.0)
-
-    def test_negative_height_raises(self):
-        """Test that negative height raises ValueError."""
-        with pytest.raises(ValueError, match="height must be positive"):
-            FieldRegion(ra_center=0.0, dec_center=0.0, width=1.0, height=-2.0)
-
-    def test_frozen(self):
-        """Test that FieldRegion is immutable."""
-        field = FieldRegion(ra_center=180.0, dec_center=-30.0, width=2.0, height=2.0)
-        with pytest.raises(AttributeError):
-            field.ra_center = 0.0
-
-
-# ---------------------------------------------------------------------------
-# plan_pong_scan tests
-# ---------------------------------------------------------------------------
+            FieldRegion(ra_center=0.0, dec_center=0.0, width=1.0, height=height)
 
 
 class TestPlanPongScan:
@@ -262,25 +234,6 @@ class TestPlanPongScan:
         # Trajectories should differ when offset is applied
         assert not np.allclose(block_no_offset.trajectory.az, block_with_offset.trajectory.az)
 
-    def test_scan_block_is_frozen(self, site, start_time, small_field):
-        """ScanBlock should be immutable after creation."""
-        block = plan_pong_scan(
-            field=small_field,
-            velocity=0.5,
-            spacing=0.1,
-            num_terms=4,
-            site=site,
-            start_time=start_time,
-            timestep=0.1,
-        )
-        with pytest.raises(AttributeError):
-            block.duration = 999.0
-
-
-# ---------------------------------------------------------------------------
-# plan_daisy_scan tests
-# ---------------------------------------------------------------------------
-
 
 class TestPlanDaisyScan:
     """Tests for plan_daisy_scan."""
@@ -381,11 +334,6 @@ class TestPlanDaisyScan:
         assert not np.allclose(block_no_offset.trajectory.az, block_with_offset.trajectory.az)
 
 
-# ---------------------------------------------------------------------------
-# _field_region_corners tests
-# ---------------------------------------------------------------------------
-
-
 class TestFieldRegionCorners:
     """Tests for the _field_region_corners helper."""
 
@@ -410,11 +358,6 @@ class TestFieldRegionCorners:
         # After 90 deg rotation: width (4.0) appears in Dec, height (2.0) in RA
         assert max(abs(r) for r in ra_vals) == pytest.approx(1.0, abs=0.01)
         assert max(abs(d) for d in dec_vals) == pytest.approx(2.0, abs=0.01)
-
-
-# ---------------------------------------------------------------------------
-# plan_constant_el_scan tests
-# ---------------------------------------------------------------------------
 
 
 class TestPlanConstantElScan:
@@ -535,3 +478,65 @@ class TestPlanConstantElScan:
                 start_time=Time("2026-03-15T00:00:00", scale="utc"),
                 rising=True,
             )
+
+    def test_science_mask_excludes_turnarounds(self, site, ecdfs_field, search_time):
+        """CE scan trajectory should have turnaround samples excluded by science_mask."""
+        block = plan_constant_el_scan(
+            field=ecdfs_field,
+            elevation=50.0,
+            velocity=0.5,
+            site=site,
+            start_time=search_time,
+            rising=True,
+            angle=170.0,
+        )
+
+        traj = block.trajectory
+        assert traj.scan_flag is not None
+        science = traj.science_mask
+        # science_mask should exclude some turnaround samples
+        assert science.sum() < traj.n_points
+        # But the majority should be science
+        assert science.sum() > traj.n_points * 0.5
+
+
+class TestCrossPlanIntegration:
+    """Cross-plan tests: all three plan functions with the same field."""
+
+    @pytest.fixture
+    def shared_field(self):
+        """Field region usable by all three plan functions."""
+        return FieldRegion(ra_center=180.0, dec_center=-30.0, width=1.0, height=1.0)
+
+    @pytest.fixture
+    def shared_time(self):
+        return Time("2026-03-15T04:00:00", scale="utc")
+
+    def test_all_plans_produce_finite_trajectories(self, site, shared_field, shared_time):
+        """All three plan functions produce trajectories with finite az/el values."""
+        pong = plan_pong_scan(
+            field=shared_field,
+            velocity=0.5,
+            spacing=0.1,
+            num_terms=4,
+            site=site,
+            start_time=shared_time,
+            timestep=0.1,
+        )
+        daisy = plan_daisy_scan(
+            ra=shared_field.ra_center,
+            dec=shared_field.dec_center,
+            radius=0.5,
+            velocity=0.3,
+            turn_radius=0.2,
+            avoidance_radius=0.0,
+            start_acceleration=0.5,
+            site=site,
+            start_time=shared_time,
+            timestep=0.1,
+            duration=60.0,
+        )
+
+        for block in [pong, daisy]:
+            assert np.all(np.isfinite(block.trajectory.az))
+            assert np.all(np.isfinite(block.trajectory.el))

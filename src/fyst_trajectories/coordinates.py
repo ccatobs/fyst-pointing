@@ -129,7 +129,6 @@ class AltAzCoord:
         return self.alt
 
     def __repr__(self) -> str:
-        """Return string representation of the coordinate."""
         return f"AltAzCoord(az={self.az:.4f}°, alt={self.alt:.4f}°)"
 
 
@@ -287,7 +286,7 @@ class Coordinates:
         ra = sky_coord.ra.deg
         dec = sky_coord.dec.deg
 
-        if np.isscalar(az) and np.isscalar(alt):
+        if np.isscalar(az) and np.isscalar(alt) and obstime.isscalar:
             return float(ra), float(dec)
         return ra, dec
 
@@ -594,11 +593,11 @@ class Coordinates:
         ...     max_search_hours=24.0,
         ...     step_hours=0.1,
         ... )
-        >>> if rise is not None:
+        >>> if rise is not None and set_ is not None:
         ...     print(f"Rises at: {rise.iso}")
         ...     print(f"Sets at: {set_.iso}")
         ... else:
-        ...     print("Source is circumpolar or never visible")
+        ...     print("Source is circumpolar, never visible, or does not set within window")
 
         Using telescope elevation limit as horizon:
 
