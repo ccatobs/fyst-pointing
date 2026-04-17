@@ -32,8 +32,10 @@ from .site import FYST_PLATE_SCALE
 # y = r*sin(theta), where theta is measured counterclockwise from the
 # +x axis. At zero field rotation, x is the cross-elevation direction
 # and y is the elevation direction.
-#
-# TODO: Actual values should be verified with the instrument team.
+# UNVERIFIED: see "Pending instrument verification" in docs/index.rst
+# (plate scale and inner ring radius). The on-sky angular offsets of every
+# off-axis module scale linearly with both, so wrong values produce
+# correlated astrometric biases across the inner-ring modules.
 
 INNER_RING_RADIUS_MM = 461.3
 """Inner ring module distance from optical axis in millimeters."""
@@ -195,6 +197,10 @@ def resolve_offset(
         return get_primecam_offset(module)
 
     if has_custom:
-        return InstrumentOffset(dx=dx or 0.0, dy=dy or 0.0, name=name)
+        return InstrumentOffset(
+            dx=dx if dx is not None else 0.0,
+            dy=dy if dy is not None else 0.0,
+            name=name,
+        )
 
     return None

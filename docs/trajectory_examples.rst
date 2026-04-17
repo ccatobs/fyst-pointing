@@ -120,8 +120,8 @@ duration, and number of scans from the field geometry::
     )
     trajectory = block.trajectory
 
-For manual control (engineering tests, known azimuth ranges), use
-``ConstantElScanConfig`` + ``TrajectoryBuilder`` directly::
+For manual control (engineering tests, known azimuth ranges),
+``ConstantElScanConfig`` + ``TrajectoryBuilder`` can be used directly::
 
     from fyst_trajectories import get_fyst_site
     from fyst_trajectories.patterns import ConstantElScanConfig, TrajectoryBuilder
@@ -238,12 +238,11 @@ Constant velocity motion in Az/El::
 ACU Upload
 ----------
 
-In practice, the PCS ACU agent handles the integration between fyst-trajectories
-and the telescope hardware. The agent's ``execute_scan()`` task receives scan
-parameters from the OCS scheduler, uses fyst-trajectories to compute the
-trajectory, and passes the result to ``aculib`` for upload to the TCS::
+In production the PCS ACU agent receives scan parameters from the OCS
+scheduler, calls fyst-trajectories to build a trajectory, and uploads it
+via ``aculib``::
 
-    OCS Scheduler --[scan config]--> agent.py execute_scan()
+    OCS Scheduler --[scan config]--> agent.execute_scan()
                                         |
                                         v
                                     fyst-trajectories  (trajectory planning)
@@ -254,63 +253,8 @@ trajectory, and passes the result to ``aculib`` for upload to the TCS::
                                         v
                                     TCS (Go server) --> ACU Hardware
 
-fyst-trajectories is a library dependency of the PCS agent. It is **not** an
-OCS agent itself.
-
-**Production (via aculib / PCS agent):**
-
-Complete example tracking Jupiter and uploading to the TCS via ``aculib``. The
-``observatory_control_system`` class handles the HTTP session, TLS certificates,
-and logging::
-
-    from astropy.time import Time
-
-    from pcs.agents.acu_interface.aculib import observatory_control_system
-
-    from fyst_trajectories import get_fyst_site
-    from fyst_trajectories.patterns import PlanetTrackConfig, TrajectoryBuilder
-    from fyst_trajectories.primecam import resolve_offset
-    from fyst_trajectories.trajectory_utils import to_path_format
-
-    # Connect to TCS
-    tcs = observatory_control_system(
-        url="https://ocs.fyst.example",
-        log=logger,
-        server_cert="/path/to/server.crt",
-        client_cert="/path/to/client.crt",
-        client_key="/path/to/client.key",
-    )
-
-    # Generate trajectory
-    site = get_fyst_site()
-    start_time = Time("2026-03-15T12:00:00", scale="utc")
-    offset = resolve_offset(module="i3")  # or dx=..., dy=..., or None for boresight
-
-    trajectory = (
-        TrajectoryBuilder(site)
-        .with_config(PlanetTrackConfig(timestep=0.1, body="jupiter"))
-        .for_detector(offset)
-        .duration(600.0)
-        .starting_at(start_time)
-        .build()
-    )
-
-    # Upload to TCS -> ACU
-    payload = {
-        "start_time": trajectory.start_time.unix,
-        "coordsys": "Horizon",
-        "points": to_path_format(trajectory),
-    }
-    tcs.scan_pattern(payload)
-
-Inside the PCS agent, each scan task follows a 4-step pattern:
-
-1. Acquire ``self.azel_lock`` (exclusive telescope access)
-2. Call ``plan_*()`` or ``TrajectoryBuilder.build()`` (fyst-trajectories generates trajectory)
-3. Format with ``to_path_format()`` into ``{start_time, coordsys, points}``
-4. POST via ``tcs.scan_pattern(data)``
-
-Here is a realistic ``execute_scan()`` example using ``plan_pong_scan``::
+fyst-trajectories is a library dependency of the PCS agent, not an OCS
+agent itself. Inside an agent task, a typical scan looks like::
 
     # Inside ACUAgent.execute_pong_scan() -- an OCS task
     from astropy.time import Time
@@ -321,7 +265,6 @@ Here is a realistic ``execute_scan()`` example using ``plan_pong_scan``::
 
     site = get_fyst_site()
 
-    # Parameters arrive from the OCS scheduler via RPC
     field = FieldRegion(
         ra_center=params["ra_center"],
         dec_center=params["dec_center"],
@@ -340,7 +283,6 @@ Here is a realistic ``execute_scan()`` example using ``plan_pong_scan``::
         detector_offset=offset,
     )
 
-    # Format and upload
     data = {
         "start_time": float(block.trajectory.start_time.unix),
         "coordsys": "Horizon",
@@ -349,40 +291,7 @@ Here is a realistic ``execute_scan()`` example using ``plan_pong_scan``::
     tcs = self._get_tcs_client()
     tcs.scan_pattern(data)
 
-**Planning tools use the same library:**
-
-The planning and simulation tools (e.g., hitmap generation, integration time
-estimation) import the same ``fyst_trajectories`` library. This guarantees that
-the trajectories used for observation planning match exactly what the telescope
-executes::
-
-    # In a planning notebook or scan_patterns analysis script
-    from fyst_trajectories import get_fyst_site
-    from fyst_trajectories.planning import FieldRegion, plan_pong_scan
-
-    site = get_fyst_site()
-    field = FieldRegion(ra_center=180.0, dec_center=-30.0, width=2.0, height=2.0)
-
-    from astropy.time import Time
-
-    block = plan_pong_scan(
-        field=field,
-        velocity=0.5,
-        spacing=0.1,
-        num_terms=4,
-        timestep=0.1,
-        site=site,
-        start_time=Time("2026-03-15T04:00:00", scale="utc"),
-    )
-
-    # Same trajectory object -- use for hitmap simulation
-    trajectory = block.trajectory
-    print(f"Simulating {trajectory.n_points} points over {trajectory.duration:.0f}s")
-    # ... feed trajectory.az, trajectory.el into coverage analysis ...
-
-**Direct HTTP (testing / debugging only):**
-
-For quick local testing without the PCS agent::
+For local testing without the PCS agent, POST the same payload directly::
 
     import requests
 
@@ -393,8 +302,11 @@ For quick local testing without the PCS agent::
         "coordsys": "Horizon",
         "points": to_path_format(trajectory),
     }
-
     response = requests.post("http://localhost:8000/path", json=payload)
+
+The planning and simulation pipelines import the same library, so
+trajectories used for coverage analysis match what the telescope executes
+at runtime.
 
 Pattern Selection
 -----------------
@@ -429,7 +341,7 @@ Pattern Selection
 Drift Scan (Planet Calibration)
 -------------------------------
 
-Set up a constant elevation scan where a planet drifts through the field of view
+A constant elevation scan where a planet drifts through the field of view
 due to Earth's rotation.
 
 **Simple constant-el scan centered on planet position**::

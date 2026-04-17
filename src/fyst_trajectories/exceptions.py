@@ -46,9 +46,10 @@ class PointingError(ValueError):
     --------
     Catch any pointing-related error:
 
+    >>> from fyst_trajectories import validate_trajectory
     >>> from fyst_trajectories.exceptions import PointingError
     >>> try:
-    ...     trajectory.validate(site)
+    ...     validate_trajectory(trajectory, site)
     ... except PointingError as exc:
     ...     print(f"Pointing error: {exc}")
     """
@@ -74,9 +75,10 @@ class TrajectoryBoundsError(PointingError):
     --------
     Catch and inspect a bounds error:
 
+    >>> from fyst_trajectories import validate_trajectory
     >>> from fyst_trajectories.exceptions import TrajectoryBoundsError
     >>> try:
-    ...     trajectory.validate(site)
+    ...     validate_trajectory(trajectory, site)
     ... except TrajectoryBoundsError as exc:
     ...     print(f"Axis: {exc.axis}")
     ...     print(f"Actual: [{exc.actual_min:.2f}, {exc.actual_max:.2f}]")

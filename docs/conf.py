@@ -2,8 +2,17 @@
 
 import os
 import sys
+import warnings
 
 sys.path.insert(0, os.path.abspath("../src"))
+
+# Suppress the upstream sphinx_autodoc_typehints deprecation warning about
+# _RstSnippetParser.set_application being removed in Sphinx 10.
+warnings.filterwarnings(
+    "ignore",
+    message=".*set_application.*is deprecated.*",
+    category=DeprecationWarning,
+)
 
 project = "fyst-trajectories"
 copyright = "[TBD]"
@@ -32,3 +41,4 @@ html_theme = "sphinx_rtd_theme"
 
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"
+autodoc_mock_imports = ["matplotlib"]

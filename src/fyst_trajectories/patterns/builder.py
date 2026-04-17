@@ -44,8 +44,8 @@ from ..site import AtmosphericConditions, Site
 from ..trajectory import Trajectory
 from ..trajectory_utils import validate_trajectory_bounds, validate_trajectory_dynamics
 from .base import AltAzPattern, CelestialPattern
-from .configs import CONFIG_TO_PATTERN, ScanConfig
-from .registry import get_pattern
+from .configs import ScanConfig
+from .registry import get_pattern, get_pattern_for_config
 
 if TYPE_CHECKING:
     from ..offsets import InstrumentOffset
@@ -178,14 +178,10 @@ class TrajectoryBuilder:
         """
         self._config = config
 
-        config_type = type(config)
-        if config_type in CONFIG_TO_PATTERN:
-            self._pattern_name = CONFIG_TO_PATTERN[config_type]
-        else:
-            raise ValueError(
-                f"Unknown config type: {config_type.__name__}. "
-                f"Expected one of: {list(CONFIG_TO_PATTERN.keys())}"
-            )
+        try:
+            self._pattern_name = get_pattern_for_config(type(config))
+        except KeyError as exc:
+            raise ValueError(str(exc)) from None
 
         return self
 

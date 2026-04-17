@@ -180,7 +180,7 @@ class TestOffsetTransformProperties:
     def test_boresight_detector_round_trip(self, dx, dy, az, el):
         """Test that boresight -> detector -> boresight returns original.
 
-        Spherical round-trip with Newton refinement achieves sub-milliarcsecond
+        Spherical round-trip with iterative refinement achieves sub-milliarcsecond
         precision. Skip cases where offset would push elevation past 89 deg
         (zenith singularity causes 1/cos(el) amplification in azimuth).
         """
@@ -210,7 +210,7 @@ class TestOffsetTransformProperties:
     def test_round_trip_with_field_rotation(self, dx, dy, az, el, field_rotation):
         """Test round-trip with field rotation applied.
 
-        Spherical round-trip with Newton refinement achieves sub-milliarcsecond
+        Spherical round-trip with iterative refinement achieves sub-milliarcsecond
         precision. Skip cases where offset would push elevation past 89 deg
         (zenith singularity causes 1/cos(el) amplification in azimuth).
         """

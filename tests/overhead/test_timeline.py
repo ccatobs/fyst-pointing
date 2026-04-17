@@ -1,5 +1,8 @@
 """Tests for the timeline generator."""
 
+import numpy as np
+from astropy.time import Time
+
 from fyst_trajectories import Coordinates, get_fyst_site
 from fyst_trajectories.overhead import (
     CalibrationPolicy,
@@ -9,6 +12,7 @@ from fyst_trajectories.overhead import (
     SunAvoidanceConstraint,
     generate_timeline,
 )
+from fyst_trajectories.overhead.scheduler.helpers import _time_until_set
 
 
 def assert_timeline_valid(timeline, site):
@@ -189,7 +193,7 @@ class TestGenerateTimeline:
         coords = Coordinates(site)
         for b in timeline.science_blocks:
             mid_time = b.t_start + (b.t_stop - b.t_start) / 2
-            az_mid = (b.az_min + b.az_max) / 2.0
+            az_mid = (b.az_start + b.az_end) / 2.0
             assert coords.is_sun_safe(az_mid, b.elevation, mid_time)
 
     def test_constant_el_patch(self):
@@ -235,6 +239,45 @@ class TestGenerateTimeline:
         )
         assert_timeline_valid(timeline, site)
 
+    def test_pong_scan_clipped_to_observability(self):
+        """Pong scans should not extend past the source setting time."""
+        site = get_fyst_site()
+        coords = Coordinates(site)
+
+        # Pick RA=60 at ~08:00 UTC — source will be setting at FYST.
+        # This creates a scenario where the source sets during a long scan.
+        patches = [
+            ObservingPatch(
+                name="setting_source",
+                ra_center=60.0,
+                dec_center=-30.0,
+                width=4.0,
+                height=4.0,
+                scan_type="pong",
+                velocity=0.5,
+            ),
+        ]
+        timeline = generate_timeline(
+            patches=patches,
+            site=site,
+            start_time="2026-06-15T07:00:00",
+            end_time="2026-06-15T12:00:00",
+            overhead_model=OverheadModel(max_scan_duration=3600.0),
+        )
+        assert_timeline_valid(timeline, site)
+
+        el_min = site.telescope_limits.elevation.min
+        for b in timeline.science_blocks:
+            # Verify the source is above el_min at both start and end of scan.
+            _, el_start = coords.radec_to_altaz(np.array([60.0]), np.array([-30.0]), b.t_start)
+            _, el_end = coords.radec_to_altaz(np.array([60.0]), np.array([-30.0]), b.t_stop)
+            assert float(el_start[0]) >= el_min - 1.0, (
+                f"Source below el_min at scan start: {float(el_start[0]):.1f} deg"
+            )
+            assert float(el_end[0]) >= el_min - 1.0, (
+                f"Source below el_min at scan end: {float(el_end[0]):.1f} deg"
+            )
+
     def test_validate_method(self):
         site = get_fyst_site()
         patches = [
@@ -256,3 +299,43 @@ class TestGenerateTimeline:
         )
         warnings = timeline.validate()
         assert warnings == []
+
+
+class TestTimeUntilSet:
+    """Tests for the _time_until_set helper."""
+
+    def test_near_transit_source_returns_max(self):
+        """A source near transit stays high — should get full requested duration."""
+        site = get_fyst_site()
+        coords = Coordinates(site)
+        # RA=180, Dec=-30 transits at ~23:00 UTC at FYST. At 23:00 UTC
+        # elevation is ~83 deg — well above 20. A 1-hour window around
+        # transit should return the full duration.
+        t = Time("2026-06-15T23:00:00", scale="utc")
+        dur = _time_until_set(180.0, -30.0, t, 3600.0, coords, 20.0)
+        assert dur == 3600.0
+
+    def test_setting_source_returns_less_than_max(self):
+        """A source that sets within the window should return a clipped duration."""
+        site = get_fyst_site()
+        coords = Coordinates(site)
+        # RA=60, Dec=-30 at 08:00 UTC — this source is heading towards setting
+        # at FYST. The full 2-hour window should be clipped.
+        t = Time("2026-06-15T08:00:00", scale="utc")
+        dur = _time_until_set(60.0, -30.0, t, 7200.0, coords, 20.0)
+        # Should be meaningfully less than 7200 (source sets within 2 hours)
+        # but still positive (source is currently above el_min).
+        _, el = coords.radec_to_altaz(np.array([60.0]), np.array([-30.0]), t)
+        if float(el[0]) > 20.0:
+            assert 0.0 < dur < 7200.0
+
+    def test_source_already_below_returns_zero(self):
+        """A source already below el_min should return 0."""
+        site = get_fyst_site()
+        coords = Coordinates(site)
+        # RA=60 at 12:00 UTC — source should be well set at FYST
+        t = Time("2026-06-15T12:00:00", scale="utc")
+        _, el = coords.radec_to_altaz(np.array([60.0]), np.array([-30.0]), t)
+        if float(el[0]) < 20.0:
+            dur = _time_until_set(60.0, -30.0, t, 3600.0, coords, 20.0)
+            assert dur == 0.0

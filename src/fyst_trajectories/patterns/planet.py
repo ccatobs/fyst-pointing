@@ -3,6 +3,7 @@
 Tracks a solar system body as it moves across the sky.
 """
 
+import dataclasses
 from typing import ClassVar
 
 import numpy as np
@@ -10,17 +11,16 @@ from astropy import units as u
 from astropy.time import Time, TimeDelta
 
 from ..coordinates import Coordinates
-from ..exceptions import TargetNotObservableError, TrajectoryBoundsError
 from ..site import AtmosphericConditions, Site
 from ..trajectory import Trajectory
 from ..trajectory_utils import validate_trajectory_bounds
 from .base import AltAzPattern, TrajectoryMetadata
 from .configs import PlanetTrackConfig
 from .registry import register_pattern
-from .utils import compute_velocities, normalize_azimuth
+from .utils import compute_velocities, normalize_azimuth, wrap_bounds_error
 
 
-@register_pattern("planet")
+@register_pattern("planet", config=PlanetTrackConfig)
 class PlanetTrackPattern(AltAzPattern):
     """Planet tracking pattern.
 
@@ -121,14 +121,8 @@ class PlanetTrackPattern(AltAzPattern):
         az_vel = compute_velocities(az, times, is_angular=True)
         el_vel = compute_velocities(el, times, is_angular=False)
 
-        try:
+        with wrap_bounds_error(self.config.body.capitalize(), start_time.iso):
             validate_trajectory_bounds(site, az, el)
-        except TrajectoryBoundsError as exc:
-            raise TargetNotObservableError(
-                target=self.config.body.capitalize(),
-                time_info=start_time.iso,
-                bounds_error=exc,
-            ) from None
 
         # Compute planet RA/Dec at the trajectory midpoint so that
         # apply_detector_offset() can compute the parallactic angle.
@@ -137,11 +131,8 @@ class PlanetTrackPattern(AltAzPattern):
         midpoint_time = start_time + TimeDelta(duration / 2.0 * u.s)
         mid_ra, mid_dec = coords.get_body_radec(self.config.body, midpoint_time)
 
-        metadata = self.get_metadata()
         # Attach midpoint RA/Dec directly to the (frozen) metadata via replace.
-        from dataclasses import replace as _replace
-
-        metadata = _replace(metadata, center_ra=mid_ra, center_dec=mid_dec)
+        metadata = dataclasses.replace(self.get_metadata(), center_ra=mid_ra, center_dec=mid_dec)
 
         return Trajectory(
             times=times,

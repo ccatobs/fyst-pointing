@@ -14,7 +14,9 @@ Get the FYST site configuration::
 Coordinate Transformations
 --------------------------
 
-Convert RA/Dec to Az/El::
+Convert RA/Dec to Az/El. For trajectory generation, use bare
+``Coordinates(site)`` -- the FYST ACU applies atmospheric refraction
+downstream, so vacuum (geometric) coordinates are correct::
 
     from astropy.time import Time
 
@@ -28,7 +30,17 @@ Convert RA/Dec to Az/El::
     az, el = coords.radec_to_altaz(ra=83.82, dec=-5.39, obstime=obstime)
     print(f"Orion is at Az={az:.1f}, El={el:.1f}")
 
-**Coordinate frame translation**::
+.. note::
+
+   ``Coordinates(site)`` defaults to vacuum because the FYST ACU
+   applies atmospheric refraction at execution time. Applying
+   refraction here would cause double-refraction errors in the
+   telescope pointing. For planning and simulation (visibility
+   calculations, observability checks) where results are NOT sent to
+   the ACU, use ``AtmosphericConditions.for_fyst()`` -- see
+   :ref:`quickstart-planning-refraction` below.
+
+**Frame name translation** (string alias resolution)::
 
     from fyst_trajectories import FRAME_ALIASES, normalize_frame
 
@@ -55,21 +67,31 @@ Convert RA/Dec to Az/El::
 
 See :doc:`coordinate_systems` for more details on supported coordinate systems.
 
-Disabling Refraction
---------------------
+.. _quickstart-planning-refraction:
 
-For geometric (vacuum) coordinates without atmospheric refraction::
+Planning with Refraction
+------------------------
+
+For planning and simulation (visibility calculations, observability
+checks, hitmap simulations) where the output is NOT sent to the ACU,
+pass :meth:`~fyst_trajectories.site.AtmosphericConditions.for_fyst` to
+apply submillimetre-appropriate refraction at typical Cerro Chajnantor
+conditions::
 
     from astropy.time import Time
 
     from fyst_trajectories import AtmosphericConditions, Coordinates, get_fyst_site
 
     site = get_fyst_site()
-    coords = Coordinates(site, atmosphere=AtmosphericConditions.no_refraction())
+    coords = Coordinates(site, atmosphere=AtmosphericConditions.for_fyst())
 
-    # These are now geometric coordinates (no refraction applied)
+    # Visibility check: where is this source right now?
     obstime = Time("2026-01-15T02:00:00", scale="utc")
     az, el = coords.radec_to_altaz(ra=83.82, dec=-5.39, obstime=obstime)
+
+``AtmosphericConditions.no_refraction()`` is available as an explicit
+synonym for vacuum when you want to be self-documenting about the
+choice, but bare ``Coordinates(site)`` is equivalent and cleaner.
 
 Trajectory Generation
 ---------------------

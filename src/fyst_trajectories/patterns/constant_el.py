@@ -19,7 +19,7 @@ from .registry import register_pattern
 from .turnarounds import quintic_turnaround
 
 
-@register_pattern("constant_el")
+@register_pattern("constant_el", config=ConstantElScanConfig)
 class ConstantElScanPattern(AltAzPattern):
     """Constant elevation scan pattern.
 

@@ -9,17 +9,16 @@ from astropy import units as u
 from astropy.time import Time, TimeDelta
 
 from ..coordinates import Coordinates
-from ..exceptions import TargetNotObservableError, TrajectoryBoundsError
 from ..site import AtmosphericConditions, Site
 from ..trajectory import Trajectory
 from ..trajectory_utils import validate_trajectory_bounds
 from .base import CelestialPattern, TrajectoryMetadata
 from .configs import SiderealTrackConfig
 from .registry import register_pattern
-from .utils import compute_velocities, normalize_azimuth
+from .utils import compute_velocities, normalize_azimuth, wrap_bounds_error
 
 
-@register_pattern("sidereal")
+@register_pattern("sidereal", config=SiderealTrackConfig)
 class SiderealTrackPattern(CelestialPattern):
     """Sidereal tracking pattern.
 
@@ -122,14 +121,8 @@ class SiderealTrackPattern(CelestialPattern):
         az_vel = compute_velocities(az, times, is_angular=True)
         el_vel = compute_velocities(el, times, is_angular=False)
 
-        try:
+        with wrap_bounds_error(f"RA={self.ra:.3f} Dec={self.dec:.3f}", start_time.iso):
             validate_trajectory_bounds(site, az, el)
-        except TrajectoryBoundsError as exc:
-            raise TargetNotObservableError(
-                target=f"RA={self.ra:.3f} Dec={self.dec:.3f}",
-                time_info=start_time.iso,
-                bounds_error=exc,
-            ) from None
 
         return Trajectory(
             times=times,

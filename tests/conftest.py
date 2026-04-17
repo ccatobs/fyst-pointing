@@ -22,8 +22,9 @@ def pytest_addoption(parser):
     )
 
 
-def pytest_configure(config):
-    config.addinivalue_line("markers", "slow: marks tests as slow")
+# The ``slow`` marker is registered in pyproject.toml under
+# ``[tool.pytest.ini_options].markers``; no ``pytest_configure`` hook
+# needed here.
 
 
 def pytest_collection_modifyitems(config, items):

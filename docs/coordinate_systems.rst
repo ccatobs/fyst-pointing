@@ -7,21 +7,27 @@ with ``FRAME_ALIASES`` for compatibility with telescope control systems.
 Frame Aliases
 -------------
 
-+---------------+----------------------------+
-| Alias         | Astropy Frame              |
-+===============+============================+
-| ``J2000``     | ``icrs``                   |
-+---------------+----------------------------+
-| ``FK5``       | ``fk5``                    |
-+---------------+----------------------------+
-| ``B1950``     | ``fk4``                    |
-+---------------+----------------------------+
-| ``GALACTIC``  | ``galactic``               |
-+---------------+----------------------------+
-| ``ECLIPTIC``  | ``geocentrictrueecliptic`` |
-+---------------+----------------------------+
-| ``HORIZON``   | ``altaz``                  |
-+---------------+----------------------------+
++-------------------+----------------------------+
+| Alias             | Astropy Frame              |
++===================+============================+
+| ``J2000`` [#j2k]_ | ``icrs``                   |
++-------------------+----------------------------+
+| ``FK5``           | ``fk5``                    |
++-------------------+----------------------------+
+| ``B1950``         | ``fk4``                    |
++-------------------+----------------------------+
+| ``GALACTIC``      | ``galactic``               |
++-------------------+----------------------------+
+| ``ECLIPTIC``      | ``geocentrictrueecliptic`` |
++-------------------+----------------------------+
+| ``HORIZON``       | ``altaz``                  |
++-------------------+----------------------------+
+
+.. [#j2k] ``J2000`` is a label of convenience: this library maps it to
+   ``icrs``, but ICRS and FK5(J2000) differ by ~22 mas (the IAU 1997
+   alignment). Sub-arcsecond catalogue work should use ``FK5`` if the
+   inputs are FK5 J2000.0; for telescope pointing the offset is well
+   below the beam and is harmless.
 
 **Usage**::
 
@@ -70,7 +76,11 @@ Pattern-generated trajectories track coordinate provenance:
 Proper Motion
 -------------
 
-For high proper motion stars, use ``radec_to_altaz_with_pm()``::
+High proper motion stars are handled by ``radec_to_altaz_with_pm()``.
+For trajectory generation (output sent to the ACU), bare
+``Coordinates(site)`` is appropriate -- the ACU applies atmospheric
+refraction downstream. For planning/simulation,
+``AtmosphericConditions.for_fyst()`` can be passed instead::
 
     from astropy.time import Time
 
@@ -101,3 +111,13 @@ and instrument rotation, use ``compute_focal_plane_rotation()``:
     ``rotation = nasmyth_sign * elevation + instrument_rotation + parallactic_angle``
 
 See :doc:`instrument_offsets` for details on the decomposition and usage.
+
+.. note::
+
+   Sources whose declination is close to the site latitude
+   (``|dec − lat| < 5°``) transit very near the zenith, where the
+   parallactic-angle *rate* diverges. FYST's lat = −22.99° puts sources
+   with dec ≈ −18° to −28° in this regime; field rotation can swing
+   through 180° in a few seconds at transit. See
+   :meth:`~fyst_trajectories.coordinates.Coordinates.get_parallactic_angle` Notes
+   for the full discussion.

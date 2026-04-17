@@ -443,6 +443,33 @@ class TestNoRefraction:
         assert 0.005 < diff < 0.1
 
 
+class TestSunUsesTopocentricBody:
+    """Tests for the ``get_sun`` → ``get_body("sun", ..., location=...)`` switch."""
+
+    def test_sun_altaz_carries_topocentric_parallax(self, coordinates, site):
+        """The Sun's altaz position differs from a geocentric calculation by ~few arcsec.
+
+        ``astropy.coordinates.get_sun`` is geocentric; switching to
+        ``get_body`` with ``location=self.location`` adds the topocentric
+        parallax (~8.8 arcsec). The two should differ by less than the Sun's
+        angular diameter (~0.5°) but by more than zero.
+        """
+        from astropy.coordinates import AltAz, get_sun
+
+        obstime = Time("2026-03-15T16:00:00", scale="utc")
+        # Topocentric (library default) — uses get_body with location
+        az_topo, alt_topo = coordinates.get_sun_altaz(obstime)
+        # Geocentric (via legacy get_sun)
+        sun_geo = get_sun(obstime)
+        altaz_frame = AltAz(obstime=obstime, location=site.location)
+        geo = sun_geo.transform_to(altaz_frame)
+        # Difference is small but nonzero (~arcsec scale)
+        diff_alt = abs(alt_topo - float(geo.alt.deg))
+        assert diff_alt > 0.0
+        # Sun angular diameter ~0.53°; our shift is much smaller
+        assert diff_alt < 0.5
+
+
 class TestGetFieldRotation:
     """Tests for the get_field_rotation() method."""
 
@@ -511,6 +538,43 @@ class TestProperMotion:
 
         assert az_pm == pytest.approx(az_static, abs=0.001)
         assert el_pm == pytest.approx(el_static, abs=0.001)
+
+    def test_barnards_star_no_distance_workaround(self, coordinates):
+        """Regression guard for the 1 Mpc dummy-distance ``apply_space_motion`` workaround.
+
+        Barnard's Star has the largest known proper motion of any
+        catalogued star (~10.4 arcsec/yr in declination). This test
+        compares the no-distance code path (which uses the 1 Mpc
+        workaround documented in astropy issues #10092 and #10296)
+        against the same call with the real distance (1.83 pc).
+        Agreement to better than the proper-motion accumulation over
+        10 years confirms the workaround tracks the canonical path.
+
+        If astropy ever gains a first-class no-distance code path, the
+        numeric result here will change and force a deliberate review
+        of the Coordinates.radec_to_altaz_with_pm implementation.
+        """
+        # Barnard's Star Gaia DR2 epoch (J2015.5) parameters
+        ra = 269.452
+        dec = 4.693
+        pm_ra = -798.58
+        pm_dec = 10328.12
+        ref_epoch = Time("J2015.5")
+        obstime = Time("2025-06-15T04:00:00", scale="utc")
+
+        az_no_dist, el_no_dist = coordinates.radec_to_altaz_with_pm(
+            ra, dec, pm_ra, pm_dec, ref_epoch, obstime=obstime
+        )
+        az_with_dist, el_with_dist = coordinates.radec_to_altaz_with_pm(
+            ra, dec, pm_ra, pm_dec, ref_epoch, obstime=obstime, distance=1.83
+        )
+
+        # Both paths should agree to well below the proper-motion
+        # accumulation (~0.03°). 0.005° is the tightest tolerance the
+        # 1 Mpc workaround can reasonably hit; loosen if astropy or ERFA
+        # changes their PM-propagation precision.
+        assert az_no_dist == pytest.approx(az_with_dist, abs=0.005)
+        assert el_no_dist == pytest.approx(el_with_dist, abs=0.005)
 
 
 class TestObservingWavelength:

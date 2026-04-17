@@ -78,14 +78,20 @@ from .constant_el import ConstantElScanPattern
 from .daisy import DaisyScanPattern
 from .linear import LinearMotionPattern
 from .planet import PlanetTrackPattern
-from .pong import PongScanPattern
-from .registry import get_pattern, list_patterns, register_pattern
+from .pong import PongScanPattern, compute_pong_period
+from .registry import (
+    get_pattern,
+    get_pattern_for_config,
+    list_patterns,
+    register_pattern,
+)
 from .sidereal import SiderealTrackPattern
 
 __all__ = [
     # Registry
     "register_pattern",
     "get_pattern",
+    "get_pattern_for_config",
     "list_patterns",
     # Base classes
     "ScanPattern",
@@ -109,4 +115,6 @@ __all__ = [
     "DaisyScanPattern",
     # Builder
     "TrajectoryBuilder",
+    # Helpers
+    "compute_pong_period",
 ]

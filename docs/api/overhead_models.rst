@@ -67,3 +67,72 @@ ObservingTimeline
 .. autoclass:: fyst_trajectories.overhead.ObservingTimeline
    :members:
    :undoc-members:
+
+Typed Metadata Schemas
+----------------------
+
+Block metadata and patch ``scan_params`` follow scan-type-specific
+schemas.
+
+ScienceBlockMetadata
+~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: fyst_trajectories.overhead.ScienceBlockMetadata
+   :members:
+
+CalibrationBlockMetadata
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: fyst_trajectories.overhead.CalibrationBlockMetadata
+   :members:
+
+CEScanParams
+~~~~~~~~~~~~
+
+.. autoclass:: fyst_trajectories.overhead.CEScanParams
+   :members:
+
+PongScanParams
+~~~~~~~~~~~~~~
+
+.. autoclass:: fyst_trajectories.overhead.PongScanParams
+   :members:
+
+DaisyScanParams
+~~~~~~~~~~~~~~~
+
+.. autoclass:: fyst_trajectories.overhead.DaisyScanParams
+   :members:
+
+ScanParamsDict
+~~~~~~~~~~~~~~
+
+.. autodata:: fyst_trajectories.overhead.ScanParamsDict
+   :annotation: = CEScanParams | PongScanParams | DaisyScanParams
+
+   Umbrella union alias for the ``scan_params`` mapping carried on
+   :class:`ObservingPatch` and :class:`ScienceBlockMetadata`. The
+   concrete schema depends on the patch's ``scan_type``. All keys
+   are optional, so any subset (including ``{}``) is valid.
+   Typos and scan-type/parameter mismatches can be caught with
+   :func:`validate_scan_params`.
+
+EmptyBlockMetadata
+~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: fyst_trajectories.overhead.EmptyBlockMetadata
+   :members:
+
+TimelineBlockMetadata
+~~~~~~~~~~~~~~~~~~~~~
+
+.. autodata:: fyst_trajectories.overhead.TimelineBlockMetadata
+   :annotation: = ScienceBlockMetadata | CalibrationBlockMetadata | EmptyBlockMetadata
+
+   Exhaustive union of metadata shapes a :class:`TimelineBlock` may carry, one
+   variant per :class:`BlockType` member.
+
+Validators
+----------
+
+.. autofunction:: fyst_trajectories.overhead.validate_scan_params

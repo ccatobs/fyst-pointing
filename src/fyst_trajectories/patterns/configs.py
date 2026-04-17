@@ -8,7 +8,6 @@ immutable after creation.
 
 import warnings
 from dataclasses import dataclass
-from typing import ClassVar
 
 from ..coordinates import SOLAR_SYSTEM_BODIES
 from ..exceptions import PointingWarning
@@ -26,6 +25,32 @@ MAX_REASONABLE_VELOCITY_DEG_S: float = 5.0
 
 MAX_REASONABLE_ACCELERATION_DEG_S2: float = 3.0
 """Maximum scan acceleration before a warning is issued."""
+
+
+def _warn_if_unusual(value: float, threshold: float, label: str, unit: str) -> None:
+    """Emit :class:`PointingWarning` if ``value`` exceeds ``threshold``.
+
+    Shared helper for config ``__post_init__`` routines so each config
+    doesn't repeat the same three-line warn-on-threshold pattern.
+
+    Parameters
+    ----------
+    value : float
+        Observed value.
+    threshold : float
+        Advisory upper bound.
+    label : str
+        Short human-readable description of the field (e.g. ``"Scan width"``).
+    unit : str
+        Unit string appended to both the value and the threshold
+        (e.g. ``"deg"``, ``"deg/s"``, ``"deg/s^2"``).
+    """
+    if value > threshold:
+        warnings.warn(
+            f"{label} {value} {unit} is unusually large (> {threshold} {unit}).",
+            PointingWarning,
+            stacklevel=3,
+        )
 
 
 @dataclass(frozen=True)
@@ -79,9 +104,32 @@ class ConstantElScanConfig(ScanConfig):
     ------
     ValueError
         If az_speed or az_accel is not positive.
-    """
 
-    pattern_name: ClassVar[str] = "constant_el"
+    Notes
+    -----
+    On-sky vs azimuth-coordinate speed: at higher elevations the same
+    ``az_speed`` covers proportionally less sky because azimuth lines of
+    constant elevation get smaller toward the pole. The on-sky angular
+    rate is ``az_speed * cos(elevation)``. Worked example for typical
+    FYST elevations:
+
+    +-----------+----------------------+--------------------+
+    | Elevation | cos(el)              | On-sky / coord (%) |
+    +===========+======================+====================+
+    | 30°       | 0.866                | 86.6               |
+    +-----------+----------------------+--------------------+
+    | 45°       | 0.707                | 70.7               |
+    +-----------+----------------------+--------------------+
+    | 60°       | 0.500                | 50.0               |
+    +-----------+----------------------+--------------------+
+    | 75°       | 0.259                | 25.9               |
+    +-----------+----------------------+--------------------+
+
+    A planner that wants a fixed on-sky scan rate (e.g. for noise
+    uniformity) must scale ``az_speed`` by ``1/cos(elevation)`` for
+    each target. ``plan_constant_el_scan`` does this conversion for
+    you when called with the ``velocity`` argument (sky-frame).
+    """
 
     az_start: float
     az_stop: float
@@ -99,27 +147,14 @@ class ConstantElScanConfig(ScanConfig):
         if self.n_scans < 1:
             raise ValueError(f"n_scans must be at least 1, got {self.n_scans}")
         az_throw = abs(self.az_stop - self.az_start)
-        if az_throw > MAX_REASONABLE_SCAN_WIDTH_DEG:
-            warnings.warn(
-                f"Azimuth throw {az_throw:.1f} deg is unusually large "
-                f"(> {MAX_REASONABLE_SCAN_WIDTH_DEG} deg).",
-                PointingWarning,
-                stacklevel=2,
-            )
-        if self.az_speed > MAX_REASONABLE_VELOCITY_DEG_S:
-            warnings.warn(
-                f"Azimuth speed {self.az_speed} deg/s is unusually high "
-                f"(> {MAX_REASONABLE_VELOCITY_DEG_S} deg/s).",
-                PointingWarning,
-                stacklevel=2,
-            )
-        if self.az_accel > MAX_REASONABLE_ACCELERATION_DEG_S2:
-            warnings.warn(
-                f"Azimuth acceleration {self.az_accel} deg/s^2 is unusually high "
-                f"(> {MAX_REASONABLE_ACCELERATION_DEG_S2} deg/s^2).",
-                PointingWarning,
-                stacklevel=2,
-            )
+        _warn_if_unusual(az_throw, MAX_REASONABLE_SCAN_WIDTH_DEG, "Azimuth throw", "deg")
+        _warn_if_unusual(self.az_speed, MAX_REASONABLE_VELOCITY_DEG_S, "Azimuth speed", "deg/s")
+        _warn_if_unusual(
+            self.az_accel,
+            MAX_REASONABLE_ACCELERATION_DEG_S2,
+            "Azimuth acceleration",
+            "deg/s^2",
+        )
         d_half_turn = 5 * self.az_speed**2 / (8 * self.az_accel)
         if d_half_turn > az_throw:
             warnings.warn(
@@ -174,8 +209,6 @@ class PongScanConfig(ScanConfig):
     overlapping fields.
     """
 
-    pattern_name: ClassVar[str] = "pong"
-
     width: float
     height: float
     spacing: float
@@ -195,27 +228,9 @@ class PongScanConfig(ScanConfig):
             raise ValueError(f"velocity must be positive, got {self.velocity}")
         if self.num_terms < 1:
             raise ValueError(f"num_terms must be at least 1, got {self.num_terms}")
-        if self.width > MAX_REASONABLE_SCAN_WIDTH_DEG:
-            warnings.warn(
-                f"Scan width {self.width} deg is unusually large "
-                f"(> {MAX_REASONABLE_SCAN_WIDTH_DEG} deg).",
-                PointingWarning,
-                stacklevel=2,
-            )
-        if self.height > MAX_REASONABLE_SCAN_WIDTH_DEG:
-            warnings.warn(
-                f"Scan height {self.height} deg is unusually large "
-                f"(> {MAX_REASONABLE_SCAN_WIDTH_DEG} deg).",
-                PointingWarning,
-                stacklevel=2,
-            )
-        if self.velocity > MAX_REASONABLE_VELOCITY_DEG_S:
-            warnings.warn(
-                f"Scan velocity {self.velocity} deg/s is unusually high "
-                f"(> {MAX_REASONABLE_VELOCITY_DEG_S} deg/s).",
-                PointingWarning,
-                stacklevel=2,
-            )
+        _warn_if_unusual(self.width, MAX_REASONABLE_SCAN_WIDTH_DEG, "Scan width", "deg")
+        _warn_if_unusual(self.height, MAX_REASONABLE_SCAN_WIDTH_DEG, "Scan height", "deg")
+        _warn_if_unusual(self.velocity, MAX_REASONABLE_VELOCITY_DEG_S, "Scan velocity", "deg/s")
 
 
 @dataclass(frozen=True)
@@ -262,8 +277,6 @@ class DaisyScanConfig(ScanConfig):
     turn_radius, consider reducing velocity or increasing turn_radius.
     """
 
-    pattern_name: ClassVar[str] = "daisy"
-
     radius: float
     velocity: float
     turn_radius: float
@@ -283,27 +296,14 @@ class DaisyScanConfig(ScanConfig):
             raise ValueError(f"avoidance_radius must be non-negative, got {self.avoidance_radius}")
         if self.start_acceleration <= 0:
             raise ValueError(f"start_acceleration must be positive, got {self.start_acceleration}")
-        if self.radius > MAX_REASONABLE_DAISY_RADIUS_DEG:
-            warnings.warn(
-                f"Daisy radius {self.radius} deg is unusually large "
-                f"(> {MAX_REASONABLE_DAISY_RADIUS_DEG} deg).",
-                PointingWarning,
-                stacklevel=2,
-            )
-        if self.velocity > MAX_REASONABLE_VELOCITY_DEG_S:
-            warnings.warn(
-                f"Scan velocity {self.velocity} deg/s is unusually high "
-                f"(> {MAX_REASONABLE_VELOCITY_DEG_S} deg/s).",
-                PointingWarning,
-                stacklevel=2,
-            )
-        if self.start_acceleration > MAX_REASONABLE_ACCELERATION_DEG_S2:
-            warnings.warn(
-                f"Start acceleration {self.start_acceleration} deg/s^2 is unusually high "
-                f"(> {MAX_REASONABLE_ACCELERATION_DEG_S2} deg/s^2).",
-                PointingWarning,
-                stacklevel=2,
-            )
+        _warn_if_unusual(self.radius, MAX_REASONABLE_DAISY_RADIUS_DEG, "Daisy radius", "deg")
+        _warn_if_unusual(self.velocity, MAX_REASONABLE_VELOCITY_DEG_S, "Scan velocity", "deg/s")
+        _warn_if_unusual(
+            self.start_acceleration,
+            MAX_REASONABLE_ACCELERATION_DEG_S2,
+            "Start acceleration",
+            "deg/s^2",
+        )
 
 
 @dataclass(frozen=True)
@@ -318,8 +318,6 @@ class SiderealTrackConfig(ScanConfig):
     timestep : float
         Time between trajectory points in seconds.
     """
-
-    pattern_name: ClassVar[str] = "sidereal"
 
 
 @dataclass(frozen=True)
@@ -341,8 +339,6 @@ class PlanetTrackConfig(ScanConfig):
     ValueError
         If body is not a valid solar system body name.
     """
-
-    pattern_name: ClassVar[str] = "planet"
 
     body: str
 
@@ -374,25 +370,7 @@ class LinearMotionConfig(ScanConfig):
         Time between trajectory points in seconds.
     """
 
-    pattern_name: ClassVar[str] = "linear"
-
     az_start: float
     el_start: float
     az_velocity: float
     el_velocity: float
-
-
-# Mapping from config classes to pattern names for automatic pattern inference.
-# This allows TrajectoryBuilder.with_config() to infer the pattern type.
-# Derived from each config's pattern_name ClassVar attribute.
-CONFIG_TO_PATTERN: dict[type, str] = {
-    cls: cls.pattern_name
-    for cls in [
-        ConstantElScanConfig,
-        PongScanConfig,
-        DaisyScanConfig,
-        SiderealTrackConfig,
-        PlanetTrackConfig,
-        LinearMotionConfig,
-    ]
-}

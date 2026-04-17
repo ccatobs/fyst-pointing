@@ -16,6 +16,29 @@ Clone and install in editable mode with development extras::
     cd fyst-trajectories
     pip install -e ".[dev]"
 
+Optional dependencies
+---------------------
+
+The minimal install pulls only the core runtime dependencies (astropy,
+numpy, pyyaml). The following extras are available for opt-in features:
+
+- ``plotting`` — adds ``matplotlib`` and ``scipy``; required by
+  :mod:`fyst_trajectories.plotting` (``plot_trajectory``, ``plot_hit_map``).
+- ``performance`` — adds ``numba`` for JIT-compiled hot paths.
+- ``ephemeris`` — adds ``jplephem`` for high-precision solar-system body
+  positions.
+- ``overhead`` — adds ``healpy`` for hit-map accumulation in
+  :func:`fyst_trajectories.overhead.accumulate_hitmaps`.
+- ``docs`` — adds Sphinx and the rendering extensions used to build
+  this site.
+- ``dev`` — superset of testing and development tools (pytest,
+  hypothesis, ruff, pre-commit, skyfield, numba).
+- ``all`` — installs every extra above.
+
+Install one or more by passing them to ``pip``::
+
+    pip install -e ".[plotting,overhead]"
+
 Running tests
 -------------
 
@@ -36,9 +59,4 @@ implementations. They are gated behind the ``--run-slow`` flag::
     pytest tests/ --run-slow
 
 - **Skyfield** -- verifies coordinate transforms against an independent astronomy library
-- **scan_patterns** -- verifies scan pattern geometry against an observation/planning implementation
-  (requires ``pip install mapping @ git+https://github.com/ccatobs/scan_patterns.git``).
-  On Windows or strict-locale environments, you may need to first patch
-  ``scan_patterns/setup.py`` to add ``encoding='utf-8'`` to the ``open()`` call
-  (Python 3.10+ no longer defaults to UTF-8).
 - **KOSMA** -- verifies focal plane offset model against the KOSMA telescope control system

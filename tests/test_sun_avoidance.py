@@ -25,10 +25,10 @@ from fyst_trajectories.exceptions import (
 )
 from fyst_trajectories.planning import (
     FieldRegion,
-    _check_field_sun_safety,
     plan_daisy_scan,
     plan_pong_scan,
 )
+from fyst_trajectories.planning._sun_safety import _check_field_sun_safety
 from fyst_trajectories.site import SunAvoidanceConfig
 from fyst_trajectories.trajectory import Trajectory
 from fyst_trajectories.trajectory_utils import validate_sun_avoidance, validate_trajectory

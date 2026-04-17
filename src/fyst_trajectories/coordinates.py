@@ -8,9 +8,15 @@ ephemeris calculations.
 The transformations use astropy's coordinate transformation framework
 with IERS data for Earth orientation parameters.
 
+``Coordinates(site)`` defaults to vacuum (geometric) coordinates because
+the FYST ACU applies atmospheric refraction downstream. For planning and
+simulation (visibility calculations, observability checks, hitmap
+simulations) where the output is NOT sent to the ACU, pass
+``AtmosphericConditions.for_fyst()`` to apply submillimetre refraction.
+
 Examples
 --------
-Basic coordinate transformation:
+Trajectory generation (vacuum -- the ACU applies refraction):
 
 >>> from astropy.time import Time
 >>> from fyst_trajectories.coordinates import Coordinates
@@ -20,32 +26,31 @@ Basic coordinate transformation:
 >>> az, el = coords.radec_to_altaz(83.633, 22.014, obstime=obstime)  # Crab Nebula
 >>> print(f"Az: {az:.2f}°, El: {el:.2f}°")
 
-Get planet position:
+Planning with refraction (visibility checks, not sent to ACU):
 
->>> obstime = Time("2026-03-15T16:00:00", scale="utc")
->>> az, el = coords.get_body_altaz("mars", obstime)
->>> print(f"Mars at Az: {az:.2f}°, El: {el:.2f}°")
+>>> from fyst_trajectories.site import AtmosphericConditions
+>>> coords_plan = Coordinates(get_fyst_site(), atmosphere=AtmosphericConditions.for_fyst())
+>>> az, el = coords_plan.radec_to_altaz(83.633, 22.014, obstime=obstime)
 """
 
 import warnings
 from dataclasses import dataclass
 from types import MappingProxyType
 
+import erfa
 import numpy as np
 from astropy import units as u
-from astropy.coordinates import AltAz, SkyCoord, get_body, get_sun
+from astropy.coordinates import AltAz, SkyCoord, get_body
 from astropy.time import Time, TimeDelta
 
 from .site import AtmosphericConditions, Site
 
-try:
-    import erfa
-
-    _erfa_warning_cls = erfa.ErfaWarning
-except (ImportError, AttributeError):
-    # ImportError: erfa not installed (should not happen with astropy, but
-    # defensive).  AttributeError: older erfa versions that lack ErfaWarning.
-    _erfa_warning_cls = UserWarning
+# ``erfa`` (PyPI: ``pyerfa``) ships ``ErfaWarning`` in every release reachable
+# from any astropy>=5.0 install (the dependency floor in pyproject.toml), so
+# the import and attribute lookup are unconditional. The previous defensive
+# try/except fell back to ``UserWarning``, which would have silently demoted
+# real ERFA messages if it ever fired -- a worse signal than failing loudly.
+_erfa_warning_cls = erfa.ErfaWarning
 
 # Supported solar system bodies for ephemeris
 SOLAR_SYSTEM_BODIES = [
@@ -62,6 +67,10 @@ SOLAR_SYSTEM_BODIES = [
 
 # Frame name aliases for KOSMA/OCS compatibility
 # Maps common telescope control system names to astropy frame names.
+# Note: ``"J2000"`` maps to ICRS, not FK5 J2000.0. The two frames differ
+# by ~22 mas at the catalogue level (the IAU 1997 alignment of ICRS to
+# FK5). For sub-arcsecond catalogue work this matters; for telescope
+# pointing it is well below the beam and is harmless.
 FRAME_ALIASES: MappingProxyType[str, str] = MappingProxyType(
     {
         "J2000": "icrs",
@@ -136,23 +145,38 @@ class Coordinates:
     """Coordinate transformation engine for a telescope site.
 
     This class provides methods for converting between celestial and
-    horizontal coordinate systems, accounting for atmospheric refraction
-    and providing solar system ephemeris calculations.
+    horizontal coordinate systems, with optional atmospheric refraction
+    and solar system ephemeris calculations.
+
+    The default (``atmosphere=None``) produces vacuum (geometric)
+    coordinates. This is the correct default for trajectory generation
+    because the FYST ACU applies atmospheric refraction downstream.
+    Pass ``AtmosphericConditions.for_fyst()`` for planning and
+    simulation where the output is not sent to the ACU.
 
     Parameters
     ----------
     site : Site
         Telescope site configuration containing location.
     atmosphere : AtmosphericConditions or None, optional
-        Atmospheric conditions for refraction correction. If not provided,
-        refraction is disabled (pressure=0). Construct an
-        ``AtmosphericConditions`` instance to enable refraction.
+        Atmospheric conditions for refraction correction. If not
+        provided, defaults to vacuum (pressure=0). Pass
+        ``AtmosphericConditions.for_fyst()`` for planning/simulation,
+        or ``AtmosphericConditions.no_refraction()`` as an explicit
+        synonym for the vacuum default.
 
     Examples
     --------
+    Trajectory generation (vacuum -- ACU applies refraction):
+
     >>> from fyst_trajectories.coordinates import Coordinates
     >>> from fyst_trajectories.site import get_fyst_site
     >>> coords = Coordinates(get_fyst_site())
+
+    Planning with refraction (not sent to ACU):
+
+    >>> from fyst_trajectories.site import AtmosphericConditions
+    >>> coords = Coordinates(get_fyst_site(), atmosphere=AtmosphericConditions.for_fyst())
 
     Transform a single position:
 
@@ -327,10 +351,10 @@ class Coordinates:
         if body not in SOLAR_SYSTEM_BODIES:
             raise ValueError(f"Unknown body '{body}'. Supported bodies: {SOLAR_SYSTEM_BODIES}")
 
-        if body == "sun":
-            body_coord = get_sun(obstime)
-        else:
-            body_coord = get_body(body, obstime, location=self.location)
+        # Use get_body uniformly so the returned position carries the
+        # site's topocentric parallax (~8.8 arcsec for the Sun) — astropy's
+        # get_sun() is geocentric.
+        body_coord = get_body(body, obstime, location=self.location)
 
         altaz_frame = self._get_altaz_frame(obstime)
         altaz = body_coord.transform_to(altaz_frame)
@@ -379,10 +403,9 @@ class Coordinates:
         if body not in SOLAR_SYSTEM_BODIES:
             raise ValueError(f"Unknown body '{body}'. Supported bodies: {SOLAR_SYSTEM_BODIES}")
 
-        if body == "sun":
-            body_coord = get_sun(obstime)
-        else:
-            body_coord = get_body(body, obstime, location=self.location)
+        # Use get_body uniformly so the returned position carries the
+        # site's topocentric parallax — astropy's get_sun() is geocentric.
+        body_coord = get_body(body, obstime, location=self.location)
 
         icrs = body_coord.icrs
         ra = icrs.ra.deg
@@ -582,7 +605,7 @@ class Coordinates:
         Examples
         --------
         >>> from astropy.time import Time
-        >>> coords = Coordinates(site)
+        >>> coords = Coordinates(site, atmosphere=AtmosphericConditions.for_fyst())
         >>> start = Time("2026-03-15T00:00:00", scale="utc")
         >>> # Find when Orion rises and sets
         >>> rise, set_ = coords.get_rise_set_times(
@@ -741,6 +764,17 @@ class Coordinates:
         For objects at the zenith or very close to it, the parallactic
         angle is undefined (returns 0).
 
+        Sources whose declination is close to the site latitude
+        (``|dec − lat| < 5°``) transit very near the zenith and the
+        parallactic-angle *rate* diverges as ``dq/dt → ∞`` at transit.
+        The formula above remains stable (``arctan2`` handles the sign
+        flip) but downstream consumers that depend on PA continuity
+        (e.g. focal-plane rotation rate) should be aware that field
+        rotation can swing through 180° in a few seconds at zenith.
+        FYST's lat = −22.99° puts sources with dec ≈ −18° to −28° in
+        this regime; the ``el_min = 20°`` constraint mitigates but does
+        not eliminate the issue.
+
         Examples
         --------
         >>> from astropy.time import Time
@@ -767,7 +801,7 @@ class Coordinates:
         pa_rad = np.arctan2(numerator, denominator)
         pa_deg = np.rad2deg(pa_rad)
 
-        if np.isscalar(ra) and np.isscalar(dec):
+        if np.isscalar(ra) and np.isscalar(dec) and obstime.isscalar:
             return float(pa_deg)
         return pa_deg
 
@@ -811,7 +845,7 @@ class Coordinates:
 
         See Also
         --------
-        fyst_trajectories.offsets.compute_focal_plane_rotation :
+        :func:`~fyst_trajectories.offsets.compute_focal_plane_rotation` :
             Full focal-plane rotation including Nasmyth sign and
             instrument rotation.
 
@@ -827,7 +861,7 @@ class Coordinates:
 
         field_rotation = self.site.nasmyth_sign * el + pa
 
-        if np.isscalar(ra) and np.isscalar(dec):
+        if np.isscalar(ra) and np.isscalar(dec) and obstime.isscalar:
             return float(field_rotation)
         return field_rotation
 
@@ -921,12 +955,15 @@ class Coordinates:
         if distance is not None:
             coord_at_obs = coord.apply_space_motion(new_obstime=obstime)
         else:
-            # Without a real distance, use a large dummy distance to leverage
-            # astropy's spherical proper motion propagation. This avoids edge
-            # cases near the poles that arise from the manual linear approach
-            # (dividing by cos(dec) near dec=+/-90).
-            # Suppress the ERFA "distance overridden" warning that may be
-            # triggered by the unrealistically large dummy distance (1e6 pc).
+            # Without a real distance, use a large dummy distance (1 Mpc)
+            # to leverage astropy's spherical proper motion propagation.
+            # This is the documented workaround for the no-distance case
+            # — see astropy issues #10092 and #10296 — and avoids the
+            # cos(dec) singularity of a naive linear approach at the
+            # celestial poles. The Barnard's Star regression test in
+            # tests/test_coordinates.py guards against future astropy
+            # behaviour drift here; if astropy ever gains a first-class
+            # no-distance code path, the test will catch the change.
             dummy_coord = SkyCoord(
                 ra=ra * u.deg,
                 dec=dec * u.deg,

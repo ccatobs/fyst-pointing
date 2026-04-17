@@ -29,6 +29,7 @@ Compute boresight for a detector target:
 ... )
 """
 
+import dataclasses
 import warnings
 from dataclasses import dataclass
 
@@ -38,6 +39,7 @@ from .coordinates import Coordinates
 from .exceptions import PointingWarning
 from .site import Site
 from .trajectory import Trajectory
+from .trajectory_utils import get_absolute_times
 
 
 @dataclass(frozen=True)
@@ -248,6 +250,16 @@ def _offset_forward(
     return new_az, new_el
 
 
+_INVERSE_EARLY_EXIT_THRESHOLD: float = 1e-12
+"""Iterative refinement convergence threshold in degrees (~3.6 microarcsec)."""
+
+_INVERSE_FAILURE_THRESHOLD: float = 1e-6
+"""Degrees (~3.6 arcsec) above which _offset_inverse raises RuntimeError."""
+
+_INVERSE_MAX_ITERATIONS: int = 20
+"""Maximum refinement iterations in _offset_inverse."""
+
+
 def _offset_inverse(
     det_az: float | np.ndarray,
     det_el: float | np.ndarray,
@@ -258,8 +270,8 @@ def _offset_inverse(
 
     Given a detector position and the (already field-rotation-rotated)
     offset, compute the boresight position. Uses the forward formula with
-    negated offsets plus ten Newton refinement iterations for
-    sub-microarcsecond round-trip precision.
+    negated offsets plus iterative refinement for sub-microarcsecond
+    round-trip precision.
 
     Parameters
     ----------
@@ -282,33 +294,46 @@ def _offset_inverse(
     Notes
     -----
     The closed-form inverse (negated offsets applied via the forward
-    formula) has round-trip error of order ``rho^3``. Each Newton
-    iteration squares the relative error. Up to 20 iterations are
-    performed, with early exit when the correction drops below
-    1e-12 degrees (~3.6 microarcsec). A ``RuntimeError`` is raised
-    if the residual exceeds 1e-6 degrees after all iterations.
+    formula) has round-trip error of order ``rho^3``. The refinement
+    is fixed-point iteration (the residual is added back to the previous
+    estimate; no Jacobian is computed), so each iteration drops the
+    relative error by roughly one order of magnitude. Up to
+    :data:`_INVERSE_MAX_ITERATIONS` iterations are performed, with early
+    exit when the correction drops below
+    :data:`_INVERSE_EARLY_EXIT_THRESHOLD`. A ``RuntimeError`` is raised
+    if the residual exceeds :data:`_INVERSE_FAILURE_THRESHOLD` after
+    all iterations.
     """
     bore_az, bore_el = _offset_forward(det_az, det_el, -dx_rot_deg, -dy_rot_deg)
 
-    _EARLY_EXIT_THRESHOLD = 1e-12  # degrees (~3.6 microarcsec)
-    _FAILURE_THRESHOLD = 1e-6  # degrees (~3.6 arcsec)
-    _MAX_ITERATIONS = 20
-    for _ in range(_MAX_ITERATIONS):
+    # Track the worst residual ever seen so the diagnostic on failure can
+    # report the full convergence history. The failure check itself uses
+    # only the last-iteration residual: for the contractive map underlying
+    # this fixed-point iteration, a converged endpoint is the user-visible
+    # answer regardless of early-iteration transients. (Non-monotone
+    # convergence does occur for unrealistic-large offsets near the zenith
+    # singularity -- e.g. dx=117 deg at el=86 deg in the hypothesis suite
+    # -- but the iteration still lands sub-microarcsecond at the end.)
+    worst_err = 0.0
+
+    for _ in range(_INVERSE_MAX_ITERATIONS):
         det_az_check, det_el_check = _offset_forward(bore_az, bore_el, dx_rot_deg, dy_rot_deg)
         d_az = det_az - det_az_check
         d_el = det_el - det_el_check
         bore_az = bore_az + d_az
         bore_el = bore_el + d_el
-        if np.all(np.abs(d_az) < _EARLY_EXIT_THRESHOLD) and np.all(
-            np.abs(d_el) < _EARLY_EXIT_THRESHOLD
+        worst_err = max(worst_err, float(np.max(np.abs(d_az))), float(np.max(np.abs(d_el))))
+        if np.all(np.abs(d_az) < _INVERSE_EARLY_EXIT_THRESHOLD) and np.all(
+            np.abs(d_el) < _INVERSE_EARLY_EXIT_THRESHOLD
         ):
             break
     else:
-        max_err = max(float(np.max(np.abs(d_az))), float(np.max(np.abs(d_el))))
-        if max_err > _FAILURE_THRESHOLD:
+        last_err = max(float(np.max(np.abs(d_az))), float(np.max(np.abs(d_el))))
+        if last_err > _INVERSE_FAILURE_THRESHOLD:
             raise RuntimeError(
-                f"_offset_inverse Newton iteration failed to converge after "
-                f"{_MAX_ITERATIONS} iterations (max residual: {max_err:.2e} deg). "
+                f"_offset_inverse iterative refinement failed to converge after "
+                f"{_INVERSE_MAX_ITERATIONS} iterations "
+                f"(last residual: {last_err:.2e} deg, worst residual: {worst_err:.2e} deg). "
                 f"This may indicate an extreme offset or near-zenith elevation."
             )
 
@@ -403,7 +428,7 @@ def detector_to_boresight(
 
     Given where you want a detector to point on the sky, compute where
     the telescope boresight should be pointed. This is the inverse of
-    boresight_to_detector. Uses spherical trigonometry with Newton
+    boresight_to_detector. Uses spherical trigonometry with iterative
     refinement for sub-milliarcsecond round-trip precision.
 
     Parameters
@@ -593,30 +618,16 @@ def apply_detector_offset(
         raise ValueError("Trajectory must have start_time set for field rotation calculation")
 
     if offset.dx == 0.0 and offset.dy == 0.0 and offset.instrument_rotation == 0.0:
-        return Trajectory(
-            times=trajectory.times.copy(),
-            az=trajectory.az.copy(),
-            el=trajectory.el.copy(),
-            az_vel=trajectory.az_vel.copy(),
-            el_vel=trajectory.el_vel.copy(),
-            start_time=trajectory.start_time,
-            coordsys=trajectory.coordsys,
-            epoch=trajectory.epoch,
-            metadata=trajectory.metadata,
-            scan_flag=trajectory.scan_flag,
-        )
+        return dataclasses.replace(trajectory)
 
-    coords = Coordinates(site, atmosphere=None)
+    coords = Coordinates(site)
 
-    abs_times = trajectory.get_absolute_times()
-
-    mechanical_rotation = site.nasmyth_sign * trajectory.el + offset.instrument_rotation
+    abs_times = get_absolute_times(trajectory)
 
     if trajectory.center_ra is not None and trajectory.center_dec is not None:
         ra_arr = np.full(len(trajectory.times), trajectory.center_ra)
         dec_arr = np.full(len(trajectory.times), trajectory.center_dec)
         pa = coords.get_parallactic_angle(ra_arr, dec_arr, obstime=abs_times)
-        field_rotation = mechanical_rotation + pa
     else:
         warnings.warn(
             "Parallactic angle unavailable (no RA/Dec in trajectory metadata). "
@@ -629,7 +640,9 @@ def apply_detector_offset(
             PointingWarning,
             stacklevel=2,
         )
-        field_rotation = mechanical_rotation
+        pa = 0.0
+
+    field_rotation = compute_focal_plane_rotation(trajectory.el, site, offset, parallactic_angle=pa)
 
     bore_az, bore_el = detector_to_boresight(
         trajectory.az,

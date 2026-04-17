@@ -6,10 +6,11 @@ from astropy.time import Time, TimeDelta
 from fyst_trajectories import get_fyst_site
 from fyst_trajectories.overhead import (
     ObservingPatch,
+    TimelineBlock,
     compute_budget,
     generate_timeline,
+    validate_scan_params,
 )
-from fyst_trajectories.overhead.models import TimelineBlock
 from fyst_trajectories.overhead.simulation import _generate_trajectory_for_block
 
 
@@ -116,8 +117,8 @@ class TestGenerateTrajectoryForBlock:
             t_stop=t0 + TimeDelta(300, format="sec"),
             block_type="science",
             patch_name="no_meta",
-            az_min=170.0,
-            az_max=190.0,
+            az_start=170.0,
+            az_end=190.0,
             elevation=50.0,
             scan_index=0,
             scan_type="pong",
@@ -135,8 +136,8 @@ class TestGenerateTrajectoryForBlock:
             t_stop=t0 + TimeDelta(300, format="sec"),
             block_type="science",
             patch_name="partial_meta",
-            az_min=170.0,
-            az_max=190.0,
+            az_start=170.0,
+            az_end=190.0,
             elevation=50.0,
             scan_index=0,
             scan_type="pong",
@@ -154,8 +155,8 @@ class TestGenerateTrajectoryForBlock:
             t_stop=t0 + TimeDelta(120, format="sec"),
             block_type="science",
             patch_name="full_meta",
-            az_min=170.0,
-            az_max=190.0,
+            az_start=170.0,
+            az_end=190.0,
             elevation=60.0,
             scan_index=0,
             scan_type="pong",
@@ -171,3 +172,55 @@ class TestGenerateTrajectoryForBlock:
         sb = _generate_trajectory_for_block(block, site)
         assert sb.config.width == pytest.approx(3.0)
         assert sb.config.height == pytest.approx(2.0)
+
+    def test_raises_on_bad_scan_params_key(self):
+        """A typo in ``scan_params`` should raise KeyError, not fall through."""
+        site = get_fyst_site()
+        t0 = Time("2026-06-15T05:00:00", scale="utc")
+        block = TimelineBlock(
+            t_start=t0,
+            t_stop=t0 + TimeDelta(120, format="sec"),
+            block_type="science",
+            patch_name="typo_meta",
+            az_start=170.0,
+            az_end=190.0,
+            elevation=60.0,
+            scan_index=0,
+            scan_type="daisy",
+            metadata={
+                "ra_center": 200.0,
+                "dec_center": -25.0,
+                "width": 3.0,
+                "height": 2.0,
+                "velocity": 0.5,
+                # "radiu" is a typo for "radius" — belongs to DaisyScanParams.
+                "scan_params": {"radiu": 1.0},
+            },
+        )
+        with pytest.raises(KeyError, match="radiu"):
+            _generate_trajectory_for_block(block, site)
+
+
+class TestValidateScanParams:
+    """Unit tests for the ``scan_params`` consumer-side validator."""
+
+    def test_accepts_empty_dict(self):
+        # Every scan-params TypedDict is total=False, so {} is always valid.
+        validate_scan_params({}, "constant_el")
+        validate_scan_params({}, "pong")
+        validate_scan_params({}, "daisy")
+
+    def test_accepts_known_keys_per_scan_type(self):
+        validate_scan_params({"az_padding": 1.0, "az_accel": 0.5}, "constant_el")
+        validate_scan_params({"spacing": 0.1, "num_terms": 4}, "pong")
+        validate_scan_params({"radius": 1.0, "turn_radius": 0.5}, "daisy")
+
+    def test_rejects_unknown_key(self):
+        with pytest.raises(KeyError, match="unknown keys"):
+            validate_scan_params({"radius": 1.0}, "constant_el")  # Daisy key on CE
+        with pytest.raises(KeyError, match="spacing"):
+            validate_scan_params({"spacing": 0.1}, "daisy")  # Pong key on Daisy
+
+    def test_rejects_unknown_scan_type(self):
+        with pytest.raises(KeyError, match="Unknown scan_type"):
+            validate_scan_params({}, "sidereal")

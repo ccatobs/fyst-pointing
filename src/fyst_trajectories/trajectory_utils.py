@@ -1,30 +1,48 @@
 """Trajectory utility functions.
 
 Free functions for validating, exporting, formatting, and plotting
-Trajectory objects. These are the primary API. The corresponding
-methods on Trajectory delegate here.
+Trajectory objects. These are the primary API -- the
+:class:`~fyst_trajectories.trajectory.Trajectory` container itself
+exposes no methods that delegate here.
 """
 
 import dataclasses
 import sys
 import warnings
-from typing import TYPE_CHECKING, Any, TextIO
+from typing import TYPE_CHECKING, TextIO
 
 import numpy as np
 from astropy import units as u
 from astropy.time import Time, TimeDelta
 
+from .coordinates import Coordinates
 from .exceptions import (
     AzimuthBoundsError,
     ElevationBoundsError,
     PointingWarning,
 )
 from .site import Site
-from .trajectory import SCAN_FLAG_RETUNE, SCAN_FLAG_SCIENCE, SCAN_FLAG_TURNAROUND
+from .trajectory import (
+    SCAN_FLAG_RETUNE,
+    SCAN_FLAG_SCIENCE,
+    SCAN_FLAG_TURNAROUND,
+    Trajectory,
+)
 
 if TYPE_CHECKING:
-    from .coordinates import Coordinates
-    from .trajectory import Trajectory
+    from matplotlib.figure import Figure
+
+
+# Default wall-clock duration of a single retune event (seconds).
+# Used as the default for both the inter-scan retunes scheduled by
+# :class:`~fyst_trajectories.overhead.CalibrationPolicy` (via
+# :attr:`~fyst_trajectories.overhead.OverheadModel.retune_duration`)
+# and the in-scan retunes injected by :func:`inject_retune` for
+# per-module staggering. The two code paths are independent (different
+# layers, different retune semantics) but share the same nominal
+# wall-time -- exposing the constant here keeps them in sync if the
+# instrument team re-baselines the value.
+DEFAULT_RETUNE_DURATION_SEC: float = 5.0
 
 
 def validate_trajectory_bounds(
@@ -171,6 +189,20 @@ def validate_trajectory_dynamics(
                 PointingWarning,
                 stacklevel=2,
             )
+    elif min_cos_el > 0 and min_cos_el < 0.5:
+        # Fixed-azimuth (or near-zero az motion) high-elevation trajectories
+        # never trip the cos(el) advisory above because ``max_az_vel == 0``
+        # short-circuits the on-sky comparison. Surface the on-sky pinch as
+        # an independent observation so operators don't miss the high-el
+        # implication for a sidereal-track or zero-throw scan.
+        warnings.warn(
+            f"Trajectory reaches high elevation (min cos(el)={min_cos_el:.3f}, "
+            f"el > ~{np.degrees(np.arccos(min_cos_el)):.0f} deg). On-sky azimuth "
+            "resolution is reduced even though coordinate-frame az motion is "
+            "small or zero.",
+            PointingWarning,
+            stacklevel=2,
+        )
 
     az_accel = np.gradient(az_vel, times)
     el_accel = np.gradient(el_vel, times)
@@ -196,7 +228,7 @@ def validate_trajectory_dynamics(
 
 
 def validate_trajectory(
-    trajectory: "Trajectory",
+    trajectory: Trajectory,
     site: Site,
     check_sun: bool = True,
 ) -> None:
@@ -237,7 +269,7 @@ def validate_trajectory(
         validate_sun_avoidance(site, trajectory.az, trajectory.el, abs_times)
 
 
-def get_absolute_times(trajectory: "Trajectory") -> Time:
+def get_absolute_times(trajectory: Trajectory) -> Time:
     """Get absolute timestamps for the trajectory.
 
     Parameters
@@ -265,7 +297,7 @@ def validate_sun_avoidance(
     az: np.ndarray,
     el: np.ndarray,
     times: Time | np.ndarray,
-    coords: "Coordinates | None" = None,
+    coords: Coordinates | None = None,
 ) -> None:
     """Check sun avoidance constraints, emitting warnings for violations.
 
@@ -309,10 +341,8 @@ def validate_sun_avoidance(
     if not site.sun_avoidance.enabled:
         return
 
-    from .coordinates import Coordinates  # pylint: disable=import-outside-toplevel
-
     if coords is None:
-        coords = Coordinates(site, atmosphere=None)
+        coords = Coordinates(site)
 
     n_points = len(az)
     if n_points == 0:
@@ -387,7 +417,7 @@ def validate_sun_avoidance(
 
 
 def to_arrays(
-    trajectory: "Trajectory",
+    trajectory: Trajectory,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Export trajectory as simple arrays for ACU upload.
 
@@ -408,7 +438,7 @@ def to_arrays(
     return trajectory.times.copy(), trajectory.az.copy(), trajectory.el.copy()
 
 
-def to_path_format(trajectory: "Trajectory") -> list[list[float]]:
+def to_path_format(trajectory: Trajectory) -> list[list[float]]:
     """Convert trajectory to list format for /path endpoint.
 
     Converts the trajectory arrays into the format expected by the OCS
@@ -440,7 +470,7 @@ def to_path_format(trajectory: "Trajectory") -> list[list[float]]:
     ).tolist()
 
 
-def plot_trajectory(trajectory: "Trajectory", show: bool) -> Any:
+def plot_trajectory(trajectory: Trajectory, show: bool) -> "Figure":
     """Plot trajectory az/el vs time and sky track.
 
     Creates a 3-panel figure showing azimuth vs time, elevation vs time,
@@ -498,14 +528,14 @@ def plot_trajectory(trajectory: "Trajectory", show: bool) -> Any:
 
 
 def inject_retune(
-    trajectory: "Trajectory",
+    trajectory: Trajectory,
     retune_interval: float = 300.0,
-    retune_duration: float = 5.0,
+    retune_duration: float = DEFAULT_RETUNE_DURATION_SEC,
     prefer_turnarounds: bool = False,
     turnaround_window: float = 5.0,
     module_index: int = 0,
     n_modules: int = 1,
-) -> "Trajectory":
+) -> Trajectory:
     """Inject retune flags into a trajectory at regular intervals.
 
     Walks forward through the trajectory timeline and places retune events
@@ -531,16 +561,20 @@ def inject_retune(
     from ~16% to ~2.4% for 7 modules. Set ``n_modules=1`` (the default)
     to disable staggering and retune all modules simultaneously.
 
+    .. note::
+
+       ``retune_interval``, ``retune_duration``, and ``n_modules`` are
+       instrument-team inputs, not astronomer-tunable knobs. Default
+       values are commissioning-era placeholders; obtain actual values
+       from the Prime-Cam instrument team.
+
     Parameters
     ----------
     trajectory : Trajectory
         Input trajectory with scan_flag array.
     retune_interval : float
         Seconds between retune events (from last retune or start).
-        Default 300s (5 min) is preliminary, based on NIKA2 heritage
-        where KIDs retune at sub-scan boundaries. Optimal value depends
-        on Prime-Cam detector stability under varying atmospheric load;
-        validate with commissioning data.
+        Default 300 s (5 min).
     retune_duration : float
         Duration in seconds of each retune event.
     prefer_turnarounds : bool
@@ -604,7 +638,7 @@ def inject_retune(
     times = trajectory.times
 
     if trajectory.scan_flag is None:
-        scan_flag = np.full(len(times), SCAN_FLAG_SCIENCE, dtype=int)
+        scan_flag = np.full(len(times), SCAN_FLAG_SCIENCE, dtype=np.int8)
     else:
         scan_flag = trajectory.scan_flag.copy()
 
@@ -621,11 +655,15 @@ def inject_retune(
 
     # For staggered retune, offset the first retune time by a fraction
     # of the retune interval so different modules retune at different times.
+    # ``next_due_anchor`` is the synthetic anchor whose increments by
+    # ``retune_interval`` produce the next ``due_time``; it is *not* the
+    # wall-clock time of the most recent retune (those two coincide only
+    # when ``prefer_turnarounds`` does not snap).
     stagger_offset = module_index * retune_interval / n_modules
-    last_retune_time = float(times[0]) + stagger_offset
+    next_due_anchor = float(times[0]) + stagger_offset
 
     while True:
-        due_time = last_retune_time + retune_interval
+        due_time = next_due_anchor + retune_interval
         if due_time > float(times[-1]):
             break
 
@@ -648,13 +686,13 @@ def inject_retune(
 
         # Use max(retune_end, due_time) to prevent backward drift when
         # prefer_turnarounds snaps to a turnaround before the due time.
-        last_retune_time = max(retune_end, due_time)
+        next_due_anchor = max(retune_end, due_time)
 
     return dataclasses.replace(trajectory, scan_flag=scan_flag)
 
 
 def _format_trajectory(
-    trajectory: "Trajectory",
+    trajectory: Trajectory,
     head: int | None = 5,
     tail: int | None = 5,
 ) -> str:
@@ -701,7 +739,7 @@ def _format_trajectory(
 
 
 def print_trajectory(
-    trajectory: "Trajectory",
+    trajectory: Trajectory,
     head: int | None = 5,
     tail: int | None = 5,
     file: TextIO | None = None,

@@ -182,3 +182,53 @@ class TestDaisyScanPattern:
         assert np.all(np.isfinite(trajectory.el))
         assert np.all(np.isfinite(trajectory.az_vel))
         assert np.all(np.isfinite(trajectory.el_vel))
+
+
+class TestDaisyScanFlags:
+    """Daisy emits scan_flag, with the start ramp-up flagged as non-science."""
+
+    def test_scan_flag_populated(self, site):
+        """``Trajectory.scan_flag`` is no longer ``None`` for Daisy patterns."""
+        from fyst_trajectories.trajectory import SCAN_FLAG_SCIENCE, SCAN_FLAG_TURNAROUND
+
+        start_time = Time("2026-03-15T04:00:00", scale="utc")
+        config = DaisyScanConfig(
+            timestep=0.1,
+            radius=0.5,
+            velocity=0.3,
+            turn_radius=0.2,
+            avoidance_radius=0.0,
+            start_acceleration=0.5,
+            y_offset=0.0,
+        )
+        pattern = DaisyScanPattern(ra=180.0, dec=-30.0, config=config)
+
+        trajectory = pattern.generate(site, duration=120.0, start_time=start_time)
+
+        assert trajectory.scan_flag is not None
+        assert trajectory.scan_flag.shape == trajectory.times.shape
+        # The trajectory must contain both flag values
+        assert np.any(trajectory.scan_flag == SCAN_FLAG_SCIENCE)
+        assert np.any(trajectory.scan_flag == SCAN_FLAG_TURNAROUND)
+
+    def test_initial_ramp_up_flagged_as_turnaround(self, site):
+        """The first samples (during start_acceleration ramp-up) are non-science."""
+        from fyst_trajectories.trajectory import SCAN_FLAG_TURNAROUND
+
+        start_time = Time("2026-03-15T04:00:00", scale="utc")
+        # A slow start_acceleration relative to velocity makes the ramp
+        # take several timesteps so the test is not razor-thin.
+        config = DaisyScanConfig(
+            timestep=0.05,
+            radius=0.5,
+            velocity=0.3,
+            turn_radius=0.2,
+            avoidance_radius=0.0,
+            start_acceleration=0.3,
+            y_offset=0.0,
+        )
+        pattern = DaisyScanPattern(ra=180.0, dec=-30.0, config=config)
+        trajectory = pattern.generate(site, duration=60.0, start_time=start_time)
+
+        # First few samples must be flagged as non-science.
+        assert trajectory.scan_flag[0] == SCAN_FLAG_TURNAROUND

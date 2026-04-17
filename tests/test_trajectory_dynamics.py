@@ -168,62 +168,6 @@ class TestVelocityMatchesDerivative:
 
         self._assert_velocities_match(trajectory, rtol=1e-3, atol=1e-3)
 
-    @pytest.mark.parametrize(
-        "pattern_name,config_dict",
-        [
-            (
-                "linear",
-                {
-                    "timestep": 0.1,
-                    "az_start": 100.0,
-                    "el_start": 45.0,
-                    "az_velocity": 0.5,
-                    "el_velocity": 0.1,
-                },
-            ),
-            (
-                "pong",
-                {
-                    "timestep": 0.1,
-                    "width": 1.0,
-                    "height": 1.0,
-                    "spacing": 0.1,
-                    "velocity": 0.3,
-                    "num_terms": 4,
-                    "angle": 0.0,
-                },
-            ),
-            (
-                "daisy",
-                {
-                    "timestep": 0.1,
-                    "radius": 0.5,
-                    "velocity": 0.3,
-                    "turn_radius": 0.1,
-                    "avoidance_radius": 0.0,
-                    "start_acceleration": 0.5,
-                    "y_offset": 0.0,
-                },
-            ),
-        ],
-    )
-    def test_velocity_consistency_parametrized(self, site, start_time, pattern_name, config_dict):
-        """Parametrized test for velocity consistency across pattern types."""
-        if pattern_name == "linear":
-            config = LinearMotionConfig(**config_dict)
-            pattern = LinearMotionPattern(config)
-        elif pattern_name == "pong":
-            config = PongScanConfig(**config_dict)
-            pattern = PongScanPattern(ra=180.0, dec=-30.0, config=config)
-        elif pattern_name == "daisy":
-            config = DaisyScanConfig(**config_dict)
-            pattern = DaisyScanPattern(ra=180.0, dec=-30.0, config=config)
-        else:
-            raise ValueError(f"Unknown pattern: {pattern_name}")
-
-        trajectory = pattern.generate(site, duration=60.0, start_time=start_time)
-        self._assert_velocities_match(trajectory, rtol=1e-3, atol=1e-3)
-
 
 class TestVelocityContinuity:
     """Tests that velocities are continuous without unreasonable jumps."""

@@ -95,7 +95,7 @@ class TestCalibrationState:
     def test_update_unknown_type(self):
         t0 = Time("2026-06-15T02:00:00", scale="utc")
         state = CalibrationState()
-        with pytest.raises(ValueError, match="not a valid CalibrationType"):
+        with pytest.raises(ValueError, match="Unknown calibration type"):
             state.update("invalid", t0)
 
     def test_planet_cal_has_target(self):

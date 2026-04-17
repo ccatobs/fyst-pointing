@@ -2,8 +2,12 @@ Coordinate Transformations
 ==========================
 
 Coordinate transformation utilities with solar system ephemeris.
-Atmospheric refraction is applied only when an explicit
-``AtmosphericConditions`` is provided; the default is vacuum (no refraction).
+``Coordinates(site)`` defaults to vacuum (geometric) coordinates --
+this is the correct default for trajectory generation because the
+FYST ACU applies atmospheric refraction downstream. Pass
+:meth:`~fyst_trajectories.site.AtmosphericConditions.for_fyst` for
+planning and simulation (visibility calculations, observability
+checks) where the output is NOT sent to the ACU.
 
 .. automodule:: fyst_trajectories.coordinates
    :members:
@@ -13,21 +17,27 @@ Atmospheric refraction is applied only when an explicit
 Frame Aliases
 -------------
 
-+---------------+----------------------------+
-| Alias         | Astropy Frame              |
-+===============+============================+
-| ``J2000``     | ``icrs``                   |
-+---------------+----------------------------+
-| ``FK5``       | ``fk5``                    |
-+---------------+----------------------------+
-| ``B1950``     | ``fk4``                    |
-+---------------+----------------------------+
-| ``GALACTIC``  | ``galactic``               |
-+---------------+----------------------------+
-| ``ECLIPTIC``  | ``geocentrictrueecliptic`` |
-+---------------+----------------------------+
-| ``HORIZON``   | ``altaz``                  |
-+---------------+----------------------------+
++-------------------+----------------------------+
+| Alias             | Astropy Frame              |
++===================+============================+
+| ``J2000`` [#j2k]_ | ``icrs``                   |
++-------------------+----------------------------+
+| ``FK5``           | ``fk5``                    |
++-------------------+----------------------------+
+| ``B1950``         | ``fk4``                    |
++-------------------+----------------------------+
+| ``GALACTIC``      | ``galactic``               |
++-------------------+----------------------------+
+| ``ECLIPTIC``      | ``geocentrictrueecliptic`` |
++-------------------+----------------------------+
+| ``HORIZON``       | ``altaz``                  |
++-------------------+----------------------------+
+
+.. [#j2k] ``J2000`` is a label of convenience: this library maps it to
+   ``icrs``, but ICRS and FK5(J2000) differ by ~22 mas (the IAU 1997
+   alignment). Sub-arcsecond catalogue work should use ``FK5`` if the
+   inputs are FK5 J2000.0; for telescope pointing the offset is well
+   below the beam and is harmless.
 
 ::
 
@@ -39,7 +49,7 @@ Frame Aliases
 Usage Examples
 --------------
 
-**Basic transformation**::
+**Basic transformation** (vacuum -- ACU applies refraction)::
 
     from astropy.time import Time
 
@@ -80,18 +90,6 @@ Usage Examples
        from fyst_trajectories import SOLAR_SYSTEM_BODIES
        print(SOLAR_SYSTEM_BODIES)
        # ['sun', 'moon', 'mercury', 'venus', 'mars', 'jupiter', 'saturn', ...]
-
-AltAzCoord
-~~~~~~~~~~
-
-``AltAzCoord`` holds ``az`` and ``alt`` fields in degrees, with ``el``
-available as a property alias for ``alt``. It is returned by several
-:class:`Coordinates` helper methods::
-
-    from fyst_trajectories import AltAzCoord
-
-    coord = AltAzCoord(az=180.0, alt=45.0)
-    print(coord.az, coord.el)  # .el is an alias for .alt
 
 **Safety checks**::
 

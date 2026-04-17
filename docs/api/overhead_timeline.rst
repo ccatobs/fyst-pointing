@@ -9,6 +9,14 @@ over a given observing window.
 Constraints
 -----------
 
+.. note::
+
+   Constraints are an extension API for the scheduling internals;
+   :func:`~fyst_trajectories.overhead.generate_timeline` builds a
+   default set of (elevation + sun) constraints from the supplied
+   :class:`~fyst_trajectories.site.Site` envelopes. Most callers do not
+   need to construct or pass these directly.
+
 .. autoclass:: fyst_trajectories.overhead.Constraint
    :members:
 
@@ -38,3 +46,5 @@ Utilities
 .. autofunction:: fyst_trajectories.overhead.get_transit_time
 
 .. autofunction:: fyst_trajectories.overhead.get_max_elevation
+
+.. autofunction:: fyst_trajectories.overhead.compute_nasmyth_rotation

@@ -5,6 +5,8 @@ Trajectory validation functions live in :mod:`fyst_trajectories.trajectory_utils
 """
 
 import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -12,7 +14,7 @@ from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.time import Time
 
-from ..exceptions import PointingWarning
+from ..exceptions import PointingWarning, TargetNotObservableError, TrajectoryBoundsError
 from ..site import Site
 
 if TYPE_CHECKING:
@@ -23,7 +25,47 @@ __all__ = [
     "generate_time_array",
     "normalize_azimuth",
     "sky_offsets_to_altaz",
+    "wrap_bounds_error",
 ]
+
+
+@contextmanager
+def wrap_bounds_error(target: str, time_info: str) -> Iterator[None]:
+    """Convert :class:`TrajectoryBoundsError` into :class:`TargetNotObservableError`.
+
+    Many pattern generators need to wrap a call to
+    :func:`~fyst_trajectories.trajectory_utils.validate_trajectory_bounds`
+    with identical boilerplate that re-raises the bounds error as a
+    target-not-observable error, suppressing the chained traceback.
+
+    Parameters
+    ----------
+    target : str
+        Human-readable target identifier (e.g. ``"RA=180.0 Dec=-30.0"``
+        or ``"Jupiter"``).
+    time_info : str
+        Human-readable time (typically ``start_time.iso``).
+
+    Yields
+    ------
+    None
+
+    Examples
+    --------
+    Replace the copy-pasted ``try/except`` block in a pattern's
+    ``generate()`` method::
+
+        with wrap_bounds_error(f"RA={self.ra:.3f} Dec={self.dec:.3f}", start_time.iso):
+            validate_trajectory_bounds(site, az, el)
+    """
+    try:
+        yield
+    except TrajectoryBoundsError as exc:
+        raise TargetNotObservableError(
+            target=target,
+            time_info=time_info,
+            bounds_error=exc,
+        ) from None
 
 
 def generate_time_array(duration: float, timestep: float) -> np.ndarray:

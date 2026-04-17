@@ -52,36 +52,59 @@ Reading a Timeline
 ECSV Format
 -----------
 
-The ECSV file uses TOAST v5 column names for compatibility with the
-CMB analysis pipeline:
+The ECSV file uses TOAST ``GroundSchedule`` canonical column names
+(``start_time`` / ``stop_time`` as ISO strings, ``scan_index`` /
+``subscan_index``) plus FYST-specific extension columns for block type and
+scan pattern:
 
-+---------------------+--------+----------------------------------------------+
-| Column              | Type   | Description                                  |
-+=====================+========+==============================================+
-| ``start_timestamp`` | float  | Start time as MJD                            |
-+---------------------+--------+----------------------------------------------+
-| ``stop_timestamp``  | float  | Stop time as MJD                             |
-+---------------------+--------+----------------------------------------------+
-| ``name``            | str    | Patch name or calibration type               |
-+---------------------+--------+----------------------------------------------+
-| ``azmin``           | float  | Minimum azimuth (deg)                        |
-+---------------------+--------+----------------------------------------------+
-| ``azmax``           | float  | Maximum azimuth (deg)                        |
-+---------------------+--------+----------------------------------------------+
-| ``el``              | float  | Elevation (deg)                              |
-+---------------------+--------+----------------------------------------------+
-| ``scan``            | int    | Scan counter                                 |
-+---------------------+--------+----------------------------------------------+
-| ``subscan``         | int    | Sub-scan index                               |
-+---------------------+--------+----------------------------------------------+
-| ``boresight_angle`` | float  | Boresight rotation angle (deg)               |
-+---------------------+--------+----------------------------------------------+
-| ``block_type``      | str    | FYST extension: science/calibration/slew/idle|
-+---------------------+--------+----------------------------------------------+
-| ``scan_type``       | str    | FYST extension: pattern or cal type          |
-+---------------------+--------+----------------------------------------------+
-| ``rising``          | bool   | FYST extension: rising-side flag             |
-+---------------------+--------+----------------------------------------------+
++----------------------+--------+----------------------------------------------+
+| Column               | Type   | Description                                  |
++======================+========+==============================================+
+| ``start_time``       | str    | Start time as ISO-8601 UTC string            |
++----------------------+--------+----------------------------------------------+
+| ``stop_time``        | str    | Stop time as ISO-8601 UTC string             |
++----------------------+--------+----------------------------------------------+
+| ``name``             | str    | Patch name or calibration type               |
++----------------------+--------+----------------------------------------------+
+| ``azmin``            | float  | Minimum azimuth (deg)                        |
++----------------------+--------+----------------------------------------------+
+| ``azmax``            | float  | Maximum azimuth (deg)                        |
++----------------------+--------+----------------------------------------------+
+| ``el``               | float  | Elevation (deg)                              |
++----------------------+--------+----------------------------------------------+
+| ``scan_index``       | int    | Scan counter                                 |
++----------------------+--------+----------------------------------------------+
+| ``subscan_index``    | int    | Sub-scan index                               |
++----------------------+--------+----------------------------------------------+
+| ``boresight_angle``  | float  | Boresight rotation angle (deg)               |
++----------------------+--------+----------------------------------------------+
+| ``ra_center``        | float  | FYST extension: patch RA centre (deg)        |
++----------------------+--------+----------------------------------------------+
+| ``dec_center``       | float  | FYST extension: patch Dec centre (deg)       |
++----------------------+--------+----------------------------------------------+
+| ``width``            | float  | FYST extension: patch width (deg)            |
++----------------------+--------+----------------------------------------------+
+| ``height``           | float  | FYST extension: patch height (deg)           |
++----------------------+--------+----------------------------------------------+
+| ``velocity``         | float  | FYST extension: scan velocity (deg/s)        |
++----------------------+--------+----------------------------------------------+
+| ``scan_params_json`` | str    | FYST extension: pattern parameters (JSON)    |
++----------------------+--------+----------------------------------------------+
+| ``block_type``       | str    | FYST extension: science/calibration/slew/idle|
++----------------------+--------+----------------------------------------------+
+| ``scan_type``        | str    | FYST extension: pattern or calibration type  |
++----------------------+--------+----------------------------------------------+
+| ``rising``           | bool   | FYST extension: rising-side flag             |
++----------------------+--------+----------------------------------------------+
+| ``block_meta_json``  | str    | FYST extension: JSON-encoded bag of any      |
+|                      |        | ``TimelineBlock.metadata`` keys (see below)  |
+|                      |        | not promoted to a dedicated column above     |
++----------------------+--------+----------------------------------------------+
+
+The set of FYST extension columns may grow over time; any
+:attr:`~fyst_trajectories.overhead.TimelineBlock.metadata` field not surfaced
+as a dedicated column lands in ``block_meta_json`` so the round-trip remains
+lossless.
 
 Header metadata includes site coordinates, overhead model parameters, and
 calibration policy cadences.
@@ -89,9 +112,14 @@ calibration policy cadences.
 TOAST Compatibility
 -------------------
 
+Files written by fyst-trajectories use TOAST canonical column names for the
+common fields and can therefore be read directly by TOAST's
+``GroundSchedule`` reader (which will ignore the FYST extension columns).
+
 Standard TOAST schedule files (without ``block_type``, ``scan_type``,
-``rising`` columns) are read as all-science timelines. The reader auto-detects
-the format and applies sensible defaults.
+``rising``, or the patch-geometry extension columns) are also supported on
+read. They are interpreted as all-science timelines with sensible defaults
+for the missing FYST extension columns.
 
 To produce a TOAST-only file, filter to science blocks before writing::
 

@@ -13,6 +13,16 @@ Atmospheric conditions are always provided by the user at runtime via
 For custom (non-FYST) sites, use ``Site.from_config()`` with a YAML
 file or construct a ``Site`` directly.
 
+Notes
+-----
+Pointing-model corrections (collimation, gravitational sag, encoder
+offsets) and PWV/opacity modelling are intentionally out of scope.
+Pointing-model corrections are applied at execution time by the FYST
+Telescope Control System; PWV/opacity modelling lives in the
+downstream calibration pipeline. This module describes the *site
+geometry and mechanical limits* used by trajectory planning, nothing
+more.
+
 Examples
 --------
 Get the default FYST site:
@@ -52,11 +62,20 @@ FYST_ELEVATION: float = 5611.8
 
 FYST_PLATE_SCALE: float = 13.89
 """FYST plate scale in arcsec/mm. Source: optical design."""
+# UNVERIFIED: see "Pending instrument verification" in docs/index.rst
 
 FYST_NASMYTH_PORT: str = "right"
 """Nasmyth port side for instrument mounting ('right' = +1 sign)."""
+# UNVERIFIED: see "Pending instrument verification" in docs/index.rst
+# Wrong sign produces up to 2 * el degrees of focal-plane rotation error
+# at every off-axis Prime-Cam module. Confirmation essential before
+# first-light science.
 
 # Tier 2: Mechanical limits (from FYST TCS commands.go)
+# UNVERIFIED: see "Pending instrument verification" in docs/index.rst
+# The velocity and acceleration limits below — the conservative operational
+# values may need to be relaxed once commissioning ratifies the TCS
+# hardware limits cited in commands.go.
 
 FYST_AZ_MIN: float = -180.0
 """Minimum azimuth in degrees. Source: FYST TCS commands.go."""
@@ -98,11 +117,11 @@ Conservative operational limit (TCS hardware limit: 1.5 deg/s^2).
 # wavelengths (Hoang et al. 2024, arXiv:2406.10905), supporting the
 # magnitude. ALMA uses 15 deg (much more permissive) at lower altitude
 # with different optical/thermal constraints.
-# TODO: verify sun avoidance radii with FYST team during commissioning.
+# UNVERIFIED: see "Pending instrument verification" in docs/index.rst
 FYST_SUN_EXCLUSION_RADIUS: float = 45.0
 """Sun exclusion radius in degrees."""
 
-# TODO: verify sun avoidance radii with FYST team during commissioning.
+# UNVERIFIED: see "Pending instrument verification" in docs/index.rst
 FYST_SUN_WARNING_RADIUS: float = 50.0
 """Sun warning radius in degrees."""
 
@@ -153,10 +172,16 @@ class AtmosphericConditions:
     """Atmospheric conditions at the observing site.
 
     These parameters are used for atmospheric refraction corrections.
-    Always construct this with current weather data and pass it to
+    Should be constructed with current weather data and passed to
     ``Coordinates(site, atmosphere=...)``,
     ``TrajectoryBuilder.with_atmosphere()``, or planning functions.
     Atmosphere is never loaded from config files.
+
+    Most callers should construct via the factory classmethods rather than
+    the raw constructor: :meth:`for_fyst` for typical Cerro Chajnantor
+    submm conditions (sets ``obswl=200 µm`` so astropy uses the radio
+    refraction model), or :meth:`no_refraction` to explicitly disable
+    refraction (vacuum coordinates, useful for cross-validation).
 
     Parameters
     ----------
@@ -177,6 +202,13 @@ class AtmosphericConditions:
     ------
     ValueError
         If relative_humidity is not in the range [0, 1].
+
+    See Also
+    --------
+    AtmosphericConditions.for_fyst :
+        Factory for FYST-typical submm conditions (recommended default).
+    AtmosphericConditions.no_refraction :
+        Factory for vacuum (refraction-disabled) coordinates.
     """
 
     pressure: float
@@ -213,15 +245,63 @@ class AtmosphericConditions:
         """
         return cls(pressure=0.0, temperature=0.0, relative_humidity=0.0)
 
+    @classmethod
+    def for_fyst(
+        cls,
+        pressure: float = 500.0,
+        temperature: float = 265.0,
+        relative_humidity: float = 0.10,
+        obswl: float = 200.0,
+    ) -> "AtmosphericConditions":
+        """Create FYST-typical atmospheric conditions with submm refraction.
+
+        Convenience factory that defaults to a "typical winter night on
+        Cerro Chajnantor" weather profile and forces ``obswl=200 µm`` so
+        astropy switches to its radio-IR refraction model. The radio
+        model is wavelength-independent above ~100 µm; any value above
+        that threshold covers all FYST submillimeter bands.
+        Without this factory, callers who pass realistic
+        pressure/temperature/humidity but forget ``obswl`` silently get
+        astropy's optical (1 µm) refraction model.
+        Pressure/temperature defaults follow Bustos et al. 2014 / Cortes
+        et al. 2016 for the Chajnantor plateau and are appropriate
+        starting values; pass current weather data when available.
+
+        Parameters
+        ----------
+        pressure : float, optional
+            Atmospheric pressure in hPa. Default 500.
+        temperature : float, optional
+            Temperature in Kelvin. Default 265.
+        relative_humidity : float, optional
+            Relative humidity as a fraction (0-1). Default 0.10.
+        obswl : float, optional
+            Observing wavelength in microns. Default 200 (selects the
+            radio refraction model).
+
+        Returns
+        -------
+        AtmosphericConditions
+            FYST-typical atmospheric conditions.
+
+        Examples
+        --------
+        >>> from fyst_trajectories.site import AtmosphericConditions
+        >>> atmo = AtmosphericConditions.for_fyst()
+        >>> atmo.obswl
+        200.0
+        """
+        return cls(
+            pressure=pressure,
+            temperature=temperature,
+            relative_humidity=relative_humidity,
+            obswl=obswl,
+        )
+
     @property
     def pressure_hpa(self) -> u.Quantity:
         """Pressure as an astropy Quantity in hPa."""
         return self.pressure * u.hPa
-
-    @property
-    def temperature_k(self) -> u.Quantity:
-        """Temperature as an astropy Quantity in Kelvin."""
-        return self.temperature * u.K
 
     @property
     def temperature_degc(self) -> u.Quantity:
@@ -265,16 +345,6 @@ class AxisLimits:
     def __post_init__(self) -> None:
         if self.min > self.max:
             raise ValueError(f"min ({self.min}) must be <= max ({self.max})")
-
-    @property
-    def min_quantity(self) -> u.Quantity:
-        """Minimum limit as an astropy Quantity in degrees."""
-        return self.min * u.deg
-
-    @property
-    def max_quantity(self) -> u.Quantity:
-        """Maximum limit as an astropy Quantity in degrees."""
-        return self.max * u.deg
 
     def is_in_range(self, position: float) -> bool:
         """Return True if *position* (degrees) is within [min, max]."""
@@ -335,11 +405,6 @@ class SunAvoidanceConfig:
     enabled: bool
     exclusion_radius: float
     warning_radius: float
-
-    @property
-    def exclusion_radius_quantity(self) -> u.Quantity:
-        """Sun exclusion radius as an astropy Quantity in degrees."""
-        return self.exclusion_radius * u.deg
 
 
 _NASMYTH_SIGNS: dict[str, int] = {"right": 1, "left": -1, "cassegrain": 0}
@@ -441,21 +506,6 @@ class Site:
             lon=self.longitude * u.deg,
             height=self.elevation * u.m,
         )
-
-    @property
-    def latitude_quantity(self) -> u.Quantity:
-        """Latitude as an astropy Quantity in degrees."""
-        return self.latitude * u.deg
-
-    @property
-    def longitude_quantity(self) -> u.Quantity:
-        """Longitude as an astropy Quantity in degrees."""
-        return self.longitude * u.deg
-
-    @property
-    def elevation_quantity(self) -> u.Quantity:
-        """Elevation as an astropy Quantity in meters."""
-        return self.elevation * u.m
 
     @classmethod
     def from_config(cls, config_path: str | Path) -> "Site":
@@ -579,7 +629,7 @@ class Site:
 
         return cls(
             name=_get_required(site_config, "name", "site", config_name),
-            description=site_config.get("description", ""),  # Optional field
+            description=site_config.get("description", ""),
             latitude=_get_required(loc, "latitude", "site.location", config_name),
             longitude=_get_required(loc, "longitude", "site.location", config_name),
             elevation=_get_required(loc, "elevation", "site.location", config_name),

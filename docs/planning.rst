@@ -1,41 +1,19 @@
 Planning Module
 ===============
 
-The planning module provides a high-level interface for translating
-astronomer-friendly inputs into pattern configurations and trajectories.
-Instead of manually computing Pong periods, azimuth throws, or constructing
-low-level config objects, astronomers specify field coordinates, elevation
-constraints, and scan velocities -- the planner handles the rest.
+Astronomer-friendly wrappers that translate field coordinates, elevation
+constraints, and scan velocities into full pattern configurations. Planning
+functions exist only where there is non-trivial computation bridging the
+astronomer's inputs and the pattern config:
 
-Design Rationale
-----------------
+- **Pong** -- computes the Pong period from field dimensions, spacing, and
+  velocity.
+- **Constant-El** -- finds RA-edge elevation crossings to determine timing,
+  derives the azimuth range and ``n_scans`` automatically.
+- **Daisy** -- convenience wrapper; parameters map nearly 1:1 to the config.
 
-Planning functions exist only where **non-trivial computation** bridges the gap
-between what an astronomer specifies and what the pattern system needs:
-
-- **Pong**: The astronomer specifies a field region, velocity, and spacing. The
-  planner computes the Pong period (from vertex counts and field dimensions),
-  determines duration, and builds the config.
-- **Constant-El (auto)**: The astronomer specifies a field region, elevation,
-  velocity, and approximate start time. The planner finds the RA-edge elevation
-  crossings to determine timing, converts to an azimuth range, and derives
-  ``n_scans`` automatically (``plan_constant_el_scan``).
-- **Daisy**: Mostly a convenience wrapper -- the parameters map nearly 1:1 to
-  the config. Included for API consistency with the other two planning functions.
-
-Scan types where there is **nothing to compute** do not have planning
-functions. Use ``TrajectoryBuilder`` or pattern classes directly for:
-
-- **Sidereal tracking** -- RA/Dec + duration + timestep maps directly to
-  ``SiderealTrackConfig``.
-- **Planet tracking** -- body name + duration + timestep maps directly to
-  ``PlanetTrackConfig``.
-- **Linear motion** -- engineering use; az/el values are already in telescope
-  coordinates.
-
-This follows a similar philosophy to the Simons Observatory, where geometric
-planning is applied only to calibration scans that require focal-plane
-optimization, while standard CES scans pass through with minimal transformation.
+Sidereal, planet, and linear patterns have no non-trivial planning step;
+:class:`~fyst_trajectories.patterns.TrajectoryBuilder` can be used directly.
 
 Quick Start
 -----------
@@ -190,11 +168,15 @@ This example reproduces the two-field Stripe 82 survey configuration::
     from astropy.time import Time, TimeDelta
     import astropy.units as u
 
-    from fyst_trajectories import Coordinates, get_fyst_site
+    from fyst_trajectories import (
+        AtmosphericConditions,
+        Coordinates,
+        get_fyst_site,
+    )
     from fyst_trajectories.planning import FieldRegion, plan_pong_scan
 
     site = get_fyst_site()
-    coords = Coordinates(site)
+    coords = Coordinates(site, atmosphere=AtmosphericConditions.for_fyst())
 
     # CMB field: RA 23h-3h, Dec -9 to +5
     cmb_field = FieldRegion(ra_center=0.0, dec_center=-2.0, width=60.0, height=14.0)
@@ -219,6 +201,64 @@ This example reproduces the two-field Stripe 82 survey configuration::
         timestep=0.5,
     )
     print(cmb_block.summary)
+
+Multi-Rotation Pong Tiling
+--------------------------
+
+A single Pong scan covers a square footprint, leaving more samples
+near the corners than the centre. Combining multiple rotations spaced
+by ``180° / n_rotations`` converts the square coverage into a uniform
+circle, rapidly evening out per-pixel exposure across the full Pong
+footprint.
+
+:func:`~fyst_trajectories.planning.plan_pong_rotation_sequence` is a
+one-line helper that returns ``n_rotations`` copies of a base
+:class:`~fyst_trajectories.patterns.PongScanConfig` with the
+``angle`` field overridden to a uniform sequence. Each returned
+config is then passed individually through
+:func:`~fyst_trajectories.planning.plan_pong_scan` (typically wrapped
+in an outer scheduling layer that picks per-rotation start times)::
+
+    from astropy.time import Time, TimeDelta
+
+    from fyst_trajectories import PongScanConfig, get_fyst_site
+    from fyst_trajectories.planning import (
+        FieldRegion,
+        plan_pong_rotation_sequence,
+        plan_pong_scan,
+    )
+
+    site = get_fyst_site()
+    base = PongScanConfig(
+        timestep=0.1, width=2.0, height=2.0,
+        spacing=0.1, velocity=0.5, num_terms=4, angle=0.0,
+    )
+
+    # 8 rotations at 22.5 deg spacing.
+    configs = plan_pong_rotation_sequence(base, n_rotations=8)
+    [c.angle for c in configs]
+    # [0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5]
+
+    # Schedule each rotation back-to-back.
+    field = FieldRegion(ra_center=180.0, dec_center=-30.0, width=2.0, height=2.0)
+    t0 = Time("2026-03-15T04:00:00", scale="utc")
+    blocks = []
+    for i, cfg in enumerate(configs):
+        block = plan_pong_scan(
+            field=field,
+            velocity=cfg.velocity,
+            spacing=cfg.spacing,
+            num_terms=cfg.num_terms,
+            site=site,
+            start_time=t0 + TimeDelta(i * 600.0, format="sec"),
+            timestep=cfg.timestep,
+            angle=cfg.angle,
+        )
+        blocks.append(block)
+
+The right number of rotations depends on the science goal (more
+rotations give smoother circular coverage at the cost of total
+integration time); 8--11 is a common range for single-dish surveys.
 
 Planning a Constant-Elevation Scan
 -----------------------------------
@@ -322,12 +362,21 @@ containing:
     The total observation duration in seconds.
 
 ``computed_params``
-    A dictionary of computed parameters specific to the scan type:
+    A dictionary of computed parameters specific to the scan type. The
+    exact key set is documented by a :class:`typing.TypedDict` schema
+    per scan type:
 
-    - **Pong**: ``period``, ``x_numvert``, ``y_numvert``, ``n_cycles``
-    - **Constant-El (auto)**: ``az_start``, ``az_stop``, ``az_throw``, ``n_scans``,
-      ``start_time_iso``, ``end_time_iso``, ``duration``
-    - **Daisy**: ``duration``
+    - **Pong** -- :class:`~fyst_trajectories.planning.PongComputedParams`
+      (``period``, ``x_numvert``, ``y_numvert``, ``n_cycles``).
+    - **Constant-El (auto)** --
+      :class:`~fyst_trajectories.planning.ConstantElComputedParams`
+      (``az_start``, ``az_stop``, ``az_throw``, ``n_scans``,
+      ``start_time_iso``, ``end_time_iso``, ``duration``).
+    - **Daisy** --
+      :class:`~fyst_trajectories.planning.DaisyComputedParams`
+      (``duration``).
+
+    Access the computed parameters as a standard ``dict``.
 
 ``summary``
     A human-readable string summarizing the planned observation.
@@ -350,4 +399,5 @@ Example of inspecting a scan block::
 
     # Validate trajectory against telescope limits
     from fyst_trajectories import get_fyst_site
-    traj.validate(get_fyst_site())
+    from fyst_trajectories.trajectory_utils import validate_trajectory
+    validate_trajectory(traj, get_fyst_site())

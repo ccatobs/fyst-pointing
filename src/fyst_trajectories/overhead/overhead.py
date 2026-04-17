@@ -1,7 +1,6 @@
 """Calibration state tracking and overhead injection.
 
-Manages when calibrations are due based on cadence policies,
-inspired by SO schedlib's State-tracking approach.
+Manages when calibrations are due based on cadence policies.
 """
 
 from __future__ import annotations
@@ -41,6 +40,10 @@ class CalibrationState:
         Last sky dip time.
     last_planet_cal : Time or None
         Last planet calibration time.
+    last_beam_map : Time or None
+        Last beam-map scan time. Only consulted when
+        ``CalibrationPolicy.beam_map_cadence`` is set; otherwise beam
+        maps must be injected manually.
     """
 
     last_retune: Time | None = None
@@ -48,6 +51,7 @@ class CalibrationState:
     last_focus: Time | None = None
     last_skydip: Time | None = None
     last_planet_cal: Time | None = None
+    last_beam_map: Time | None = None
 
     def needs_calibration(
         self,
@@ -60,10 +64,12 @@ class CalibrationState:
 
         Checks each calibration type against its cadence. A cadence of 0
         means "every scan boundary" -- the retune is always needed in that
-        case (the scheduler inserts it between scans).
+        case (the scheduler inserts it between scans). Beam mapping has
+        a nullable cadence; ``policy.beam_map_cadence is None`` (the
+        default) keeps beam maps off the automatic schedule entirely.
 
         Returns calibrations in priority order: retune, pointing, focus,
-        skydip, planet_cal.
+        skydip, planet_cal, beam_map.
 
         Parameters
         ----------
@@ -74,8 +80,9 @@ class CalibrationState:
         overhead : OverheadModel
             Duration information for calibration operations.
         coords : Coordinates or None
-            Coordinate transformer. When provided, planet_cal is only
-            included if at least one planet target is above the horizon.
+            Coordinate transformer. When provided, planet_cal and
+            beam_map are only included if at least one planet target
+            is above the horizon.
 
         Returns
         -------
@@ -84,18 +91,26 @@ class CalibrationState:
         """
         needed = []
 
-        checks = [
+        checks: list[tuple[CalibrationType, Time | None, float | None]] = [
             (CalibrationType.RETUNE, self.last_retune, policy.retune_cadence),
             (CalibrationType.POINTING_CAL, self.last_pointing_cal, policy.pointing_cadence),
             (CalibrationType.FOCUS, self.last_focus, policy.focus_cadence),
             (CalibrationType.SKYDIP, self.last_skydip, policy.skydip_cadence),
             (CalibrationType.PLANET_CAL, self.last_planet_cal, policy.planet_cal_cadence),
+            (CalibrationType.BEAM_MAP, self.last_beam_map, policy.beam_map_cadence),
         ]
 
         for cal_type, last_time, cadence in checks:
+            # ``None`` cadence means "never automatically schedule" — used
+            # to preserve the legacy behaviour for BEAM_MAP unless the
+            # operator opts in.
+            if cadence is None:
+                continue
             if self._is_due(current_time, last_time, cadence):
                 target = None
-                if cal_type == CalibrationType.PLANET_CAL and policy.planet_targets:
+                if cal_type in (CalibrationType.PLANET_CAL, CalibrationType.BEAM_MAP) and (
+                    policy.planet_targets
+                ):
                     target = self._find_visible_planet(
                         policy.planet_targets,
                         current_time,
@@ -121,7 +136,7 @@ class CalibrationState:
         coords: Coordinates | None,
         min_elevation: float = 20.0,
     ) -> str | None:
-        """Return the first visible planet target, or fall back to first target.
+        """Return the first visible planet target.
 
         Parameters
         ----------
@@ -130,8 +145,12 @@ class CalibrationState:
         current_time : Time
             Current time.
         coords : Coordinates or None
-            Coordinate transformer. If None, returns the first planet
-            (no visibility check).
+            Coordinate transformer. If ``None`` the visibility check is
+            skipped entirely and the first entry of ``planet_targets``
+            is returned (caller takes responsibility for visibility).
+            When a ``Coordinates`` instance is provided the function
+            returns the first target above ``min_elevation``, or
+            ``None`` if none are visible.
         min_elevation : float
             Minimum altitude in degrees for a planet to be considered
             visible. Default is 20.0 degrees.
@@ -139,11 +158,13 @@ class CalibrationState:
         Returns
         -------
         str or None
-            Name of a visible planet, or None if coords is provided
-            and no planet is above the minimum elevation.
+            Name of a visible planet, or ``None`` when ``coords`` is
+            supplied and no planet is above the minimum elevation.
+            When ``coords`` is ``None`` and ``planet_targets`` is empty
+            this returns ``None`` (no "first target" to fall back on).
         """
         if coords is None:
-            return planet_targets[0]
+            return planet_targets[0] if planet_targets else None
 
         for planet in planet_targets:
             _, alt = coords.get_body_altaz(planet, current_time)
@@ -154,6 +175,11 @@ class CalibrationState:
 
     def update(self, cal_type: CalibrationType | str, time: Time) -> CalibrationState:
         """Return a new state with the given calibration type updated.
+
+        Looks up :attr:`CalibrationType.state_field` to find the
+        matching ``last_*`` attribute on this dataclass; both this
+        method and :meth:`OverheadModel.get_calibration_duration` share
+        a single mapping table so the two APIs cannot drift out of sync.
 
         Parameters
         ----------
@@ -167,19 +193,8 @@ class CalibrationState:
         CalibrationState
             New state with the updated timestamp.
         """
-        if isinstance(cal_type, str) and not isinstance(cal_type, CalibrationType):
-            cal_type = CalibrationType(cal_type)
-        field_map = {
-            CalibrationType.RETUNE: "last_retune",
-            CalibrationType.POINTING_CAL: "last_pointing_cal",
-            CalibrationType.FOCUS: "last_focus",
-            CalibrationType.SKYDIP: "last_skydip",
-            CalibrationType.PLANET_CAL: "last_planet_cal",
-        }
-        if cal_type not in field_map:
-            raise ValueError(f"Unknown calibration type: {cal_type}")
-
-        return dataclasses.replace(self, **{field_map[cal_type]: time})
+        cal_type = CalibrationType.coerce(cal_type)
+        return dataclasses.replace(self, **{cal_type.state_field: time})
 
     @staticmethod
     def _is_due(current_time: Time, last_time: Time | None, cadence: float) -> bool:

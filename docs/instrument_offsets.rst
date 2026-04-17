@@ -166,8 +166,7 @@ Predefined offsets for PrimeCam focal plane:
 
 .. note::
 
-   These are illustrative values. We need to verify specific with the instrument team before
-   production use!
+   These are illustrative values pending FYST instrument-team confirmation.
 
 **Access**::
 

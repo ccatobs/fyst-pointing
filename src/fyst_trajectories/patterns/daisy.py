@@ -31,15 +31,25 @@ from astropy import units as u
 from astropy.time import Time, TimeDelta
 
 from ..coordinates import Coordinates
-from ..exceptions import TargetNotObservableError, TrajectoryBoundsError
 from ..math_utils import SMALL_DISTANCE_EPSILON
 from ..site import AtmosphericConditions, Site
-from ..trajectory import Trajectory
+from ..trajectory import SCAN_FLAG_SCIENCE, SCAN_FLAG_TURNAROUND, Trajectory
 from ..trajectory_utils import validate_trajectory_bounds
 from .base import CelestialPattern, TrajectoryMetadata
 from .configs import DaisyScanConfig
 from .registry import register_pattern
-from .utils import compute_velocities, normalize_azimuth, sky_offsets_to_altaz
+from .utils import (
+    compute_velocities,
+    normalize_azimuth,
+    sky_offsets_to_altaz,
+    wrap_bounds_error,
+)
+
+# Match Pong's threshold so the two patterns flag turnarounds with the
+# same offset-frame speed criterion. The initial ramp-up phase
+# (controlled by ``DaisyScanConfig.start_acceleration``) falls below this
+# threshold and is correctly classified as non-science.
+_DAISY_SCIENCE_SPEED_THRESHOLD: float = 0.8
 
 try:
     import numba
@@ -171,14 +181,13 @@ def _daisy_loop_python(
     return x_coords, y_coords
 
 
-# Use numba JIT-compiled version when available, plain Python otherwise
 if HAS_NUMBA:
     _daisy_loop = numba.jit(nopython=True)(_daisy_loop_python)
 else:
     _daisy_loop = _daisy_loop_python
 
 
-@register_pattern("daisy")
+@register_pattern("daisy", config=DaisyScanConfig)
 class DaisyScanPattern(CelestialPattern):
     """Daisy scan pattern for point source observations.
 
@@ -334,6 +343,24 @@ class DaisyScanPattern(CelestialPattern):
 
         times, x_offsets, y_offsets = self.generate_offsets(duration)
 
+        # Flag the initial start_acceleration ramp-up using offset-frame
+        # speed (independent of elevation, matches Pong's convention).
+        # ``np.gradient`` requires at least 2 samples; degenerate scans
+        # (duration < timestep, or the inner generator emitting a single
+        # sample) bypass the speed test and are flagged conservatively
+        # as all-science. Practically unreachable for well-formed
+        # configs, but cheaper than the alternative ValueError.
+        if len(times) < 2:
+            scan_flag = np.full(len(times), SCAN_FLAG_SCIENCE, dtype=np.int8)
+        else:
+            x_vel_offset = np.gradient(x_offsets, times)
+            y_vel_offset = np.gradient(y_offsets, times)
+            speed_offset = np.sqrt(x_vel_offset**2 + y_vel_offset**2)
+            scan_flag = np.full(len(times), SCAN_FLAG_TURNAROUND, dtype=np.int8)
+            scan_flag[speed_offset >= _DAISY_SCIENCE_SPEED_THRESHOLD * self.config.velocity] = (
+                SCAN_FLAG_SCIENCE
+            )
+
         obstimes = start_time + TimeDelta(times * u.s)
 
         az, el = sky_offsets_to_altaz(
@@ -349,14 +376,8 @@ class DaisyScanPattern(CelestialPattern):
         az_vel = compute_velocities(az, times, is_angular=True)
         el_vel = compute_velocities(el, times, is_angular=False)
 
-        try:
+        with wrap_bounds_error(f"RA={self.ra:.3f} Dec={self.dec:.3f}", start_time.iso):
             validate_trajectory_bounds(site, az, el)
-        except TrajectoryBoundsError as exc:
-            raise TargetNotObservableError(
-                target=f"RA={self.ra:.3f} Dec={self.dec:.3f}",
-                time_info=start_time.iso,
-                bounds_error=exc,
-            ) from None
 
         return Trajectory(
             times=times,
@@ -367,6 +388,7 @@ class DaisyScanPattern(CelestialPattern):
             start_time=start_time,
             metadata=self.get_metadata(),
             coordsys="altaz",
+            scan_flag=scan_flag,
         )
 
     def get_metadata(self) -> TrajectoryMetadata:

@@ -55,13 +55,6 @@ Common Operations
     fig = plot_trajectory(trajectory, show=False)
     fig.savefig("trajectory.png")
 
-Convenience Methods
--------------------
-
-``Trajectory`` methods (``validate()``, ``to_path_format()``, ``to_arrays()``,
-``get_absolute_times()``, ``plot()``) are thin wrappers around these free
-functions.
-
 Validation Functions
 --------------------
 

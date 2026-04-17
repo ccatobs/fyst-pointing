@@ -15,5 +15,6 @@ API Reference
    exceptions
    overhead_models
    overhead_timeline
+   overhead_scheduler
    overhead_simulation
    overhead_io

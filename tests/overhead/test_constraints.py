@@ -87,7 +87,39 @@ class TestSunAvoidanceConstraint:
 
 
 class TestMoonAvoidanceConstraint:
-    """Tests for MoonAvoidanceConstraint."""
+    """Tests for MoonAvoidanceConstraint.
+
+    Mirrors :class:`TestSunAvoidanceConstraint` so a typo of
+    ``min_angle`` -> ``max_angle`` (or any sign-flip in the comparison
+    against the Moon separation) fails closed. The asymmetry between
+    moon and sun safety in the planner layer is intentional (see the
+    constraint class docstring) but the scheduler-side score logic
+    must remain symmetric.
+    """
+
+    def test_safe_position(self, patch, coords):
+        """A point antipodal to the Moon scores 1.0 (well outside threshold)."""
+        # Use a time when the Moon is above the FYST horizon. The score is
+        # purely an angular-separation check and ignores horizon, so the
+        # antipodal point exercises the safe-position branch even though
+        # it is itself below horizon.
+        moon_up_time = Time("2026-06-15T18:00:00", scale="utc")
+        c = MoonAvoidanceConstraint(min_angle=20.0)
+        moon_az, moon_el = coords.get_body_altaz("moon", moon_up_time)
+        safe_az = (moon_az + 180.0) % 360.0
+        score = c.score(patch, moon_up_time, safe_az, 50.0, coords)
+        assert score == 1.0
+
+    def test_near_moon(self, patch, coords):
+        """A point at the Moon's exact position scores 0.0."""
+        moon_up_time = Time("2026-06-15T18:00:00", scale="utc")
+        c = MoonAvoidanceConstraint(min_angle=20.0)
+        moon_az, moon_el = coords.get_body_altaz("moon", moon_up_time)
+        if moon_el > 0.0:
+            score = c.score(patch, moon_up_time, moon_az, moon_el, coords)
+            assert score == 0.0
+        else:
+            pytest.skip("Moon below horizon at test time")
 
     def test_negative_angle(self):
         with pytest.raises(ValueError, match="non-negative"):

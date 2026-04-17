@@ -13,9 +13,8 @@ velocity setpoints for Az/El axes.
 Derived Dynamics Properties
 ---------------------------
 
-The following read-only properties compute higher-order derivatives on
-demand from the stored velocity arrays using ``np.gradient``. They are
-not stored fields -- each access recomputes the result.
+The following read-only properties compute higher-order derivatives
+from the velocity arrays using ``np.gradient``.
 
 - ``az_accel`` / ``el_accel``: Acceleration in degrees/second^2
   (gradient of velocity with respect to time).
@@ -110,7 +109,7 @@ Usage Examples
 
     from fyst_trajectories.trajectory_utils import to_path_format, to_arrays
 
-    # For OCS /path endpoint (preferred: free function)
+    # For OCS /path endpoint
     points = to_path_format(trajectory)
     payload = {
         "start_time": trajectory.start_time.unix,
@@ -118,12 +117,8 @@ Usage Examples
         "points": points,
     }
 
-    # Simple arrays (preferred: free function)
+    # Simple arrays
     times, az, el = to_arrays(trajectory)
-
-    # Method-style calls also work (thin wrappers)
-    points = trajectory.to_path_format()
-    times, az, el = trajectory.to_arrays()
 
 **Absolute times**::
 
@@ -133,11 +128,7 @@ Usage Examples
 
     trajectory.start_time = Time("2026-03-15T04:00:00", scale="utc")
 
-    # Preferred: free function
     abs_times = get_absolute_times(trajectory)
-
-    # Method-style call also works (thin wrapper)
-    abs_times = trajectory.get_absolute_times()
 
 **Validation**::
 
@@ -146,11 +137,7 @@ Usage Examples
 
     site = get_fyst_site()
 
-    # Preferred: free function
     validate_trajectory(trajectory, site)
-
-    # Method-style call also works (thin wrapper)
-    trajectory.validate(site)
 
 **Print formatted summary**::
 

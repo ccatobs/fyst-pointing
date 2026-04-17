@@ -162,6 +162,26 @@ class TestAtmosphericConditions:
         with pytest.raises(ValueError, match="relative_humidity must be in range"):
             AtmosphericConditions(pressure=550.0, temperature=270.0, relative_humidity=-0.1)
 
+    def test_for_fyst_defaults(self):
+        """``for_fyst()`` returns a Cerro-Chajnantor profile with submm wavelength."""
+        atmo = AtmosphericConditions.for_fyst()
+        assert atmo.pressure == pytest.approx(500.0)
+        assert atmo.temperature == pytest.approx(265.0)
+        assert atmo.relative_humidity == pytest.approx(0.10)
+        # 200 µm forces astropy's radio-IR refraction model.
+        assert atmo.obswl == pytest.approx(200.0)
+        assert atmo.obswl_quantity is not None
+
+    def test_for_fyst_overrides(self):
+        """``for_fyst()`` accepts overrides for current weather."""
+        atmo = AtmosphericConditions.for_fyst(
+            pressure=520.0, temperature=270.0, relative_humidity=0.2, obswl=350.0
+        )
+        assert atmo.pressure == pytest.approx(520.0)
+        assert atmo.temperature == pytest.approx(270.0)
+        assert atmo.relative_humidity == pytest.approx(0.20)
+        assert atmo.obswl == pytest.approx(350.0)
+
 
 class TestAxisLimits:
     """Tests for AxisLimits class."""

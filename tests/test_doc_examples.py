@@ -14,6 +14,8 @@ from fyst_trajectories import (
     get_fyst_site,
     normalize_frame,
     print_trajectory,
+    to_path_format,
+    validate_trajectory,
 )
 from fyst_trajectories.exceptions import (
     ElevationBoundsError,
@@ -231,7 +233,7 @@ def test_quickstart_to_path_format():
         .build()
     )
 
-    points = trajectory.to_path_format()  # List of [time, az, el, az_vel, el_vel]
+    points = to_path_format(trajectory)  # List of [time, az, el, az_vel, el_vel]
 
     assert isinstance(points, list)
     assert len(points) > 0
@@ -368,7 +370,7 @@ def test_pipeline_stage3_trajectory_generation():
     # Validate against telescope limits
     # This scan configuration exceeds acceleration limits, which is expected behavior
     with pytest.warns(PointingWarning):
-        trajectory.validate(site)
+        validate_trajectory(trajectory, site)
 
     # Inspect the result
     print_trajectory(trajectory)
@@ -399,7 +401,7 @@ def test_pipeline_stage4_to_path_format():
 
     # Convert trajectory to the /path endpoint format.
     # Each point is [time_offset, az, el, az_vel, el_vel].
-    points = trajectory.to_path_format()
+    points = to_path_format(trajectory)
 
     # Verify format
     assert isinstance(points, list)
@@ -910,11 +912,15 @@ def test_planning_plan_pong_scan_stripe82_survey():
     import numpy as np
     from astropy.time import Time, TimeDelta
 
-    from fyst_trajectories import Coordinates, get_fyst_site
+    from fyst_trajectories import (
+        AtmosphericConditions,
+        Coordinates,
+        get_fyst_site,
+    )
     from fyst_trajectories.planning import FieldRegion, plan_pong_scan
 
     site = get_fyst_site()
-    coords = Coordinates(site)
+    coords = Coordinates(site, atmosphere=AtmosphericConditions.for_fyst())
 
     # CMB field: RA 23h-3h, Dec -9 to +5
     cmb_field = FieldRegion(ra_center=0.0, dec_center=-2.0, width=60.0, height=14.0)
@@ -1066,7 +1072,7 @@ def test_planning_inspect_scan_block():
     print(block.summary)
 
     # Validate trajectory against telescope limits
-    traj.validate(get_fyst_site())
+    validate_trajectory(traj, get_fyst_site())
 
     assert traj.n_points > 0
     assert "period" in block.computed_params
@@ -1197,3 +1203,623 @@ def test_linear_motion_pattern_docstring_example():
     pattern = LinearMotionPattern(config)
     trajectory = pattern.generate(get_fyst_site(), duration=60.0)
     assert trajectory.n_points > 0
+
+
+# ============================================================================
+# overhead_quickstart.rst examples
+# ============================================================================
+
+
+def test_overhead_quickstart_basic_usage():
+    """Test the full Basic Usage walk-through from overhead_quickstart.rst.
+
+    Generates an 8-hour timeline with two patches and explicit
+    ``OverheadModel`` and ``CalibrationPolicy`` arguments. Verifies the
+    timeline contains blocks of every expected type (the same regression
+    class as the v0.3.0 Chandra Deep Field test for ``planning.rst``).
+    """
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.overhead import (
+        CalibrationPolicy,
+        ObservingPatch,
+        OverheadModel,
+        compute_budget,
+        generate_timeline,
+    )
+
+    site = get_fyst_site()
+
+    patches = [
+        ObservingPatch(
+            name="Deep56",
+            ra_center=24.0,
+            dec_center=-32.0,
+            width=40.0,
+            height=10.0,
+            scan_type="constant_el",
+            velocity=1.0,
+            elevation=50.0,
+        ),
+        ObservingPatch(
+            name="Wide01",
+            ra_center=180.0,
+            dec_center=-30.0,
+            width=20.0,
+            height=10.0,
+            scan_type="pong",
+            velocity=0.5,
+        ),
+    ]
+
+    overhead_model = OverheadModel(
+        retune_duration=5.0,
+        pointing_cal_duration=180.0,
+        focus_duration=300.0,
+        skydip_duration=300.0,
+        planet_cal_duration=600.0,
+        beam_map_duration=600.0,
+        settle_time=5.0,
+        min_scan_duration=60.0,
+        max_scan_duration=3600.0,
+    )
+
+    calibration_policy = CalibrationPolicy(
+        retune_cadence=0.0,
+        pointing_cadence=3600.0,
+        focus_cadence=7200.0,
+        skydip_cadence=10800.0,
+        planet_cal_cadence=43200.0,
+        beam_map_cadence=None,
+        planet_targets=("jupiter", "saturn", "mars", "uranus", "neptune"),
+        planet_min_elevation=20.0,
+    )
+
+    timeline = generate_timeline(
+        patches=patches,
+        site=site,
+        start_time="2026-06-15T02:00:00",
+        end_time="2026-06-15T10:00:00",
+        overhead_model=overhead_model,
+        calibration_policy=calibration_policy,
+    )
+
+    # The doc snippet ends with ``print(f"{len(timeline)} blocks scheduled")``;
+    # we verify the produced timeline is structurally sound too.
+    assert len(timeline) > 0
+    print(f"{len(timeline)} blocks scheduled")
+
+    stats = compute_budget(timeline)
+    assert "efficiency" in stats
+    assert stats["science_time"] > 0
+    assert 0.0 <= stats["efficiency"] <= 1.0
+    print(f"Efficiency: {stats['efficiency']:.1%}")
+
+
+def test_overhead_quickstart_save_and_load(tmp_path):
+    """Test the Saving a Timeline ECSV round-trip from overhead_quickstart.rst."""
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.overhead import (
+        ObservingPatch,
+        generate_timeline,
+        read_timeline,
+        write_timeline,
+    )
+
+    site = get_fyst_site()
+    patches = [
+        ObservingPatch(
+            name="Deep56",
+            ra_center=24.0,
+            dec_center=-32.0,
+            width=40.0,
+            height=10.0,
+            scan_type="constant_el",
+            velocity=1.0,
+            elevation=50.0,
+        ),
+    ]
+    timeline = generate_timeline(
+        patches=patches,
+        site=site,
+        start_time="2026-06-15T02:00:00",
+        end_time="2026-06-15T05:00:00",
+    )
+
+    out_path = tmp_path / "my_timeline.ecsv"
+    write_timeline(timeline, str(out_path))
+    loaded = read_timeline(str(out_path))
+    print(f"Loaded {len(loaded)} blocks")
+    assert len(loaded) == len(timeline)
+
+
+# ============================================================================
+# overhead_model.rst examples
+# ============================================================================
+
+
+def test_overhead_model_explicit_construction():
+    """Test the OverheadModel construction snippet from overhead_model.rst."""
+    from fyst_trajectories.overhead import OverheadModel
+
+    model = OverheadModel(
+        retune_duration=5.0,
+        pointing_cal_duration=180.0,
+        focus_duration=300.0,
+        skydip_duration=300.0,
+        planet_cal_duration=600.0,
+        beam_map_duration=600.0,
+        settle_time=5.0,
+        min_scan_duration=60.0,
+        max_scan_duration=3600.0,
+    )
+    assert model.retune_duration == 5.0
+    assert model.beam_map_duration == 600.0
+    assert model.max_scan_duration == 3600.0
+
+
+def test_overhead_model_calibration_policy():
+    """Test the CalibrationPolicy construction snippet from overhead_model.rst."""
+    from fyst_trajectories.overhead import CalibrationPolicy
+
+    policy = CalibrationPolicy(
+        retune_cadence=0.0,
+        pointing_cadence=3600.0,
+        focus_cadence=7200.0,
+        skydip_cadence=10800.0,
+        planet_cal_cadence=43200.0,
+        beam_map_cadence=None,
+        planet_targets=("jupiter", "saturn", "mars", "uranus", "neptune"),
+        planet_min_elevation=20.0,
+    )
+    assert policy.beam_map_cadence is None
+    assert policy.pointing_cadence == 3600.0
+
+
+def test_overhead_model_beam_map_cadence_opt_in():
+    """Test the opt-in beam-map cadence example from overhead_model.rst."""
+    from fyst_trajectories.overhead import CalibrationPolicy
+
+    policy = CalibrationPolicy(beam_map_cadence=21600.0)
+    assert policy.beam_map_cadence == 21600.0
+
+
+def test_overhead_model_quick_commissioning_strategy():
+    """Test the 'Quick commissioning' configuration from overhead_model.rst."""
+    from fyst_trajectories.overhead import CalibrationPolicy, OverheadModel
+
+    commissioning_policy = CalibrationPolicy(
+        retune_cadence=0.0,
+        pointing_cadence=900.0,
+        focus_cadence=1800.0,
+        skydip_cadence=3600.0,
+    )
+    commissioning_overhead = OverheadModel(max_scan_duration=600.0)
+    assert commissioning_policy.pointing_cadence == 900.0
+    assert commissioning_overhead.max_scan_duration == 600.0
+
+
+def test_overhead_model_deep_survey_strategy():
+    """Test the 'Deep survey' configuration from overhead_model.rst."""
+    from fyst_trajectories.overhead import CalibrationPolicy, OverheadModel
+
+    survey_policy = CalibrationPolicy(
+        retune_cadence=0.0,
+        pointing_cadence=7200.0,
+        focus_cadence=14400.0,
+        skydip_cadence=21600.0,
+    )
+    survey_overhead = OverheadModel(max_scan_duration=3600.0, min_scan_duration=120.0)
+    assert survey_policy.skydip_cadence == 21600.0
+    assert survey_overhead.min_scan_duration == 120.0
+
+
+# ============================================================================
+# overhead_timeline.rst examples
+# ============================================================================
+
+
+def test_overhead_timeline_observing_patch_setup():
+    """Test the ObservingPatch construction examples from overhead_timeline.rst."""
+    from fyst_trajectories.overhead import ObservingPatch
+
+    deep_field = ObservingPatch(
+        name="Deep56",
+        ra_center=24.0,
+        dec_center=-32.0,
+        width=40.0,
+        height=10.0,
+        scan_type="constant_el",
+        velocity=1.0,
+        elevation=50.0,
+    )
+    assert deep_field.scan_type == "constant_el"
+
+    wide_field = ObservingPatch(
+        name="Wide01",
+        ra_center=180.0,
+        dec_center=-30.0,
+        width=20.0,
+        height=10.0,
+        scan_type="pong",
+        velocity=0.5,
+        scan_params={"spacing": 0.1, "num_terms": 4},
+    )
+    assert wide_field.scan_type == "pong"
+    assert wide_field.scan_params["spacing"] == 0.1
+
+
+def test_overhead_timeline_from_field_region():
+    """Test the ObservingPatch.from_field_region snippet from overhead_timeline.rst."""
+    from fyst_trajectories.overhead import ObservingPatch
+    from fyst_trajectories.planning import FieldRegion
+
+    field = FieldRegion(ra_center=0.0, dec_center=-2.0, width=60.0, height=14.0)
+    patch = ObservingPatch.from_field_region(
+        field,
+        name="Stripe82",
+        scan_type="constant_el",
+        velocity=1.0,
+        elevation=50.0,
+    )
+    assert patch.name == "Stripe82"
+    assert patch.ra_center == 0.0
+    assert patch.elevation == 50.0
+
+
+def test_overhead_timeline_custom_calibration_policy():
+    """Test the Custom CalibrationPolicy walk-through from overhead_timeline.rst."""
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.overhead import (
+        CalibrationPolicy,
+        ObservingPatch,
+        OverheadModel,
+        generate_timeline,
+    )
+
+    site = get_fyst_site()
+
+    policy = CalibrationPolicy(
+        retune_cadence=0.0,
+        pointing_cadence=1800.0,
+        focus_cadence=3600.0,
+        skydip_cadence=7200.0,
+        planet_cal_cadence=43200.0,
+    )
+    overhead = OverheadModel(retune_duration=3.0, max_scan_duration=1800.0)
+
+    patches = [
+        ObservingPatch(
+            name="CMB",
+            ra_center=0.0,
+            dec_center=-2.0,
+            width=60.0,
+            height=14.0,
+            scan_type="constant_el",
+            velocity=1.0,
+            elevation=50.0,
+        ),
+    ]
+
+    timeline = generate_timeline(
+        patches=patches,
+        site=site,
+        start_time="2026-09-15T00:00:00",
+        end_time="2026-09-15T12:00:00",
+        overhead_model=overhead,
+        calibration_policy=policy,
+    )
+    assert len(timeline) > 0
+    print(timeline)
+
+
+def test_overhead_timeline_schedule_to_trajectories():
+    """Test the schedule_to_trajectories snippet from overhead_timeline.rst."""
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.overhead import (
+        ObservingPatch,
+        generate_timeline,
+        schedule_to_trajectories,
+    )
+
+    site = get_fyst_site()
+    patches = [
+        ObservingPatch(
+            name="CMB",
+            ra_center=0.0,
+            dec_center=-2.0,
+            width=60.0,
+            height=14.0,
+            scan_type="constant_el",
+            velocity=1.0,
+            elevation=50.0,
+        ),
+    ]
+    timeline = generate_timeline(
+        patches=patches,
+        site=site,
+        start_time="2026-09-15T00:00:00",
+        end_time="2026-09-15T03:00:00",
+    )
+
+    results = list(schedule_to_trajectories(timeline))
+    assert len(results) > 0
+    # At least one science block should have produced a trajectory.
+    for timeline_block, scan_block in results:
+        traj = scan_block.trajectory
+        assert traj.n_points > 0
+
+
+def test_overhead_timeline_validate():
+    """Test the timeline.validate() snippet from overhead_timeline.rst."""
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.overhead import ObservingPatch, generate_timeline
+
+    site = get_fyst_site()
+    patches = [
+        ObservingPatch(
+            name="CMB",
+            ra_center=0.0,
+            dec_center=-2.0,
+            width=60.0,
+            height=14.0,
+            scan_type="constant_el",
+            velocity=1.0,
+            elevation=50.0,
+        ),
+    ]
+    timeline = generate_timeline(
+        patches=patches,
+        site=site,
+        start_time="2026-09-15T00:00:00",
+        end_time="2026-09-15T03:00:00",
+    )
+
+    warnings = timeline.validate()
+    # validate() returns a list of strings (possibly empty); a freshly
+    # generated timeline should be clean.
+    assert isinstance(warnings, list)
+
+
+# ============================================================================
+# overhead_io.rst examples
+# ============================================================================
+
+
+def test_overhead_io_writing_a_timeline(tmp_path):
+    """Test the Writing a Timeline snippet from overhead_io.rst."""
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.overhead import (
+        ObservingPatch,
+        generate_timeline,
+        write_timeline,
+    )
+
+    site = get_fyst_site()
+    patches = [
+        ObservingPatch(
+            name="Deep56",
+            ra_center=24.0,
+            dec_center=-32.0,
+            width=40.0,
+            height=10.0,
+            scan_type="constant_el",
+            velocity=1.0,
+            elevation=50.0,
+        ),
+    ]
+    timeline = generate_timeline(
+        patches=patches,
+        site=site,
+        start_time="2026-06-15T00:00:00",
+        end_time="2026-06-15T04:00:00",
+    )
+
+    out_path = tmp_path / "schedule.ecsv"
+    write_timeline(timeline, str(out_path))
+    assert out_path.exists()
+
+
+def test_overhead_io_reading_a_timeline(tmp_path):
+    """Test the Reading a Timeline snippet from overhead_io.rst."""
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.overhead import (
+        ObservingPatch,
+        generate_timeline,
+        read_timeline,
+        write_timeline,
+    )
+
+    site = get_fyst_site()
+    patches = [
+        ObservingPatch(
+            name="Deep56",
+            ra_center=24.0,
+            dec_center=-32.0,
+            width=40.0,
+            height=10.0,
+            scan_type="constant_el",
+            velocity=1.0,
+            elevation=50.0,
+        ),
+    ]
+    timeline = generate_timeline(
+        patches=patches,
+        site=site,
+        start_time="2026-06-15T00:00:00",
+        end_time="2026-06-15T04:00:00",
+    )
+    out_path = tmp_path / "schedule.ecsv"
+    write_timeline(timeline, str(out_path))
+
+    loaded = read_timeline(str(out_path))
+    print(f"Loaded {len(loaded)} blocks")
+    print(f"Efficiency: {loaded.efficiency:.1%}")
+    assert len(loaded) == len(timeline)
+
+
+def test_overhead_io_toast_only_filter(tmp_path):
+    """Test the science-only filter recipe from the TOAST Compatibility section."""
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.overhead import (
+        ObservingPatch,
+        ObservingTimeline,
+        generate_timeline,
+        write_timeline,
+    )
+
+    site = get_fyst_site()
+    patches = [
+        ObservingPatch(
+            name="Deep56",
+            ra_center=24.0,
+            dec_center=-32.0,
+            width=40.0,
+            height=10.0,
+            scan_type="constant_el",
+            velocity=1.0,
+            elevation=50.0,
+        ),
+    ]
+    timeline = generate_timeline(
+        patches=patches,
+        site=site,
+        start_time="2026-06-15T00:00:00",
+        end_time="2026-06-15T04:00:00",
+    )
+
+    science_only = ObservingTimeline(
+        blocks=timeline.science_blocks,
+        site=timeline.site,
+        start_time=timeline.start_time,
+        end_time=timeline.end_time,
+        overhead_model=timeline.overhead_model,
+        calibration_policy=timeline.calibration_policy,
+    )
+    out_path = tmp_path / "toast_schedule.ecsv"
+    write_timeline(science_only, str(out_path))
+    assert out_path.exists()
+
+
+# ============================================================================
+# New top-level helpers (plan_pong_rotation_sequence, no_refraction)
+# ============================================================================
+
+
+def test_plan_pong_rotation_sequence_doc_example():
+    """Test the ``plan_pong_rotation_sequence`` example from planning.rst.
+
+    The 8-rotation case should produce angles at 22.5° spacing covering
+    [0°, 180°). Verifies the doc claim
+    ``[0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5]``.
+    """
+    from fyst_trajectories import PongScanConfig
+    from fyst_trajectories.planning import plan_pong_rotation_sequence
+
+    base = PongScanConfig(
+        timestep=0.1,
+        width=2.0,
+        height=2.0,
+        spacing=0.1,
+        velocity=0.5,
+        num_terms=4,
+        angle=0.0,
+    )
+    configs = plan_pong_rotation_sequence(base, n_rotations=8)
+    angles = [c.angle for c in configs]
+    expected = [0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5]
+    assert len(angles) == 8
+    for got, want in zip(angles, expected):
+        assert abs(got - want) < 1e-9
+
+
+def test_plan_pong_rotation_sequence_full_planning_example():
+    """Test the full planning.rst snippet that schedules each rotation back-to-back."""
+    from astropy.time import TimeDelta
+
+    from fyst_trajectories import PongScanConfig, get_fyst_site
+    from fyst_trajectories.planning import (
+        FieldRegion,
+        plan_pong_rotation_sequence,
+        plan_pong_scan,
+    )
+
+    site = get_fyst_site()
+    base = PongScanConfig(
+        timestep=0.1,
+        width=2.0,
+        height=2.0,
+        spacing=0.1,
+        velocity=0.5,
+        num_terms=4,
+        angle=0.0,
+    )
+    configs = plan_pong_rotation_sequence(base, n_rotations=8)
+
+    field = FieldRegion(ra_center=180.0, dec_center=-30.0, width=2.0, height=2.0)
+    t0 = Time("2026-03-15T04:00:00", scale="utc")
+    blocks = []
+    for i, cfg in enumerate(configs):
+        block = plan_pong_scan(
+            field=field,
+            velocity=cfg.velocity,
+            spacing=cfg.spacing,
+            num_terms=cfg.num_terms,
+            site=site,
+            start_time=t0 + TimeDelta(i * 600.0, format="sec"),
+            timestep=cfg.timestep,
+            angle=cfg.angle,
+        )
+        blocks.append(block)
+    assert len(blocks) == 8
+
+
+def test_no_refraction_atmosphere_pattern():
+    """Test that ``Coordinates(site)`` produces vacuum coordinates without warning.
+
+    Bare ``Coordinates(site)`` defaults to vacuum (no refraction) because
+    the FYST ACU applies atmospheric refraction downstream. No warning
+    is emitted. ``AtmosphericConditions.no_refraction()`` is available as
+    an explicit opt-in synonym for the same behaviour.
+    """
+    from fyst_trajectories import AtmosphericConditions, Coordinates, get_fyst_site
+
+    site = get_fyst_site()
+
+    # Bare construction: vacuum, no warning.
+    coords_bare = Coordinates(site)
+    assert coords_bare.atmosphere.pressure_hpa == 0
+
+    # Explicit no_refraction: identical result.
+    coords_explicit = Coordinates(site, atmosphere=AtmosphericConditions.no_refraction())
+    assert coords_explicit.atmosphere.pressure_hpa == 0
+
+    obstime = Time("2026-01-15T02:00:00", scale="utc")
+    az, el = coords_bare.radec_to_altaz(83.633, 22.014, obstime=obstime)
+    assert isinstance(az, float)
+    assert isinstance(el, float)
+
+
+def test_print_trajectory_tail_none():
+    """Test ``print_trajectory(trajectory, tail=None)`` from trajectory_examples.rst.
+
+    Closes Finding 12 from final_docs_freshness_review (the doc claims
+    ``tail=None`` shows only the first 5 points; this test exercises that
+    variant).
+    """
+    from fyst_trajectories import get_fyst_site
+    from fyst_trajectories.patterns import SiderealTrackConfig, TrajectoryBuilder
+
+    site = get_fyst_site()
+    start_time = Time("2026-01-15T02:00:00", scale="utc")
+
+    trajectory = (
+        TrajectoryBuilder(site)
+        .at(ra=83.633, dec=22.014)
+        .with_config(SiderealTrackConfig(timestep=0.1))
+        .duration(10.0)
+        .starting_at(start_time)
+        .build()
+    )
+
+    # Should print only the first 5 points (tail=None means "skip tail").
+    print_trajectory(trajectory, tail=None)

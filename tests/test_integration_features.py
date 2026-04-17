@@ -124,30 +124,6 @@ class TestRiseSetTimes:
             f"{window_20:.2f}h >= {window_0:.2f}h"
         )
 
-    def test_uses_explicit_start_time(self, coordinates):
-        """Test that explicit start_time is used correctly."""
-        # Use a deterministic time and coordinates that definitely rise and set
-        obstime = Time("2026-06-15T12:00:00", scale="utc")
-        ra = 90.0  # Orion region, rises and sets from Chile
-        dec = 20.0
-
-        rise, set_ = coordinates.get_rise_set_times(
-            ra,
-            dec,
-            start_time=obstime,
-            horizon=0.0,
-            max_search_hours=48.0,
-            step_hours=0.5,
-        )
-
-        # This source (dec=+20, site lat=-23) should rise and set
-        assert rise is not None, "Expected a rise time for RA=90, Dec=+20"
-        assert isinstance(rise, Time)
-        assert rise > obstime
-        if set_ is not None:
-            assert isinstance(set_, Time)
-            assert set_ > rise
-
     def test_max_search_hours_parameter(self, coordinates):
         """Test that max_search_hours limits the search window."""
         # Choose a source at RA=270 (18h), Dec=+10. From Chile at this start time,

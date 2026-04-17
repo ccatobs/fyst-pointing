@@ -16,11 +16,60 @@ from ..coordinates import Coordinates
 from ..site import Site
 
 __all__ = [
+    "compute_nasmyth_rotation",
     "estimate_slew_time",
     "get_max_elevation",
     "get_observable_windows",
     "get_transit_time",
 ]
+
+
+def compute_nasmyth_rotation(az: float, el: float, site: Site) -> float:
+    """Compute Nasmyth boresight rotation from AltAz coordinates.
+
+    Returns ``site.nasmyth_sign * el + parallactic_angle`` where the
+    parallactic angle is derived from azimuth, elevation, and site
+    latitude (the AltAz form of the parallactic angle). This is the
+    overhead-timeline equivalent of
+    :meth:`fyst_trajectories.coordinates.Coordinates.get_field_rotation`,
+    which needs RA/Dec.
+
+    The AltAz-form parallactic angle is mathematically equivalent to the
+    HA-based form used by ``coordinates.get_parallactic_angle``; see
+    ``TestNasmythConsistency`` in ``tests/overhead/test_io.py`` for the
+    cross-check.
+
+    Parameters
+    ----------
+    az : float
+        Azimuth in degrees.
+    el : float
+        Elevation in degrees.
+    site : Site
+        Site configuration providing ``latitude`` and ``nasmyth_sign``.
+
+    Returns
+    -------
+    float
+        Nasmyth boresight rotation in degrees.
+    """
+    az_rad = math.radians(az)
+    el_rad = math.radians(el)
+    lat_rad = math.radians(site.latitude)
+
+    sin_az = math.sin(az_rad)
+    cos_az = math.cos(az_rad)
+    sin_el = math.sin(el_rad)
+    cos_el = math.cos(el_rad)
+    sin_lat = math.sin(lat_rad)
+    cos_lat = math.cos(lat_rad)
+
+    # Parallactic angle from AltAz (IAU convention).
+    numerator = -sin_az * cos_lat
+    denominator = sin_lat * cos_el - cos_lat * sin_el * cos_az
+    pa = math.degrees(math.atan2(numerator, denominator))
+
+    return site.nasmyth_sign * el + pa
 
 
 def estimate_slew_time(
@@ -40,6 +89,17 @@ def estimate_slew_time(
     positions are within the telescope's azimuth range, respecting the
     cable wrap constraint. The telescope cannot take a shorter modular
     path if it would require passing through the cable wrap boundary.
+
+    .. note::
+
+       Both ``az1`` and ``az2`` must be **pre-normalised** into the same
+       cable-wrap window (typically the telescope's
+       ``[az_min, az_max] = [-180, 360]`` range). Mixing raw astropy
+       ``[0, 360]`` azimuth with telescope-normalised ``[-180, 360]``
+       azimuth produces a 360°-off slew estimate; the function does not
+       enforce or check this. The scheduler phases (which always
+       normalise via :func:`_compute_az_range`) are the only intended
+       callers.
 
     Parameters
     ----------

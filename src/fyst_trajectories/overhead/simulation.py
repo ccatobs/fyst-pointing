@@ -5,6 +5,7 @@ functions to generate actual trajectories and accumulate coverage maps.
 """
 
 import logging
+from typing import cast
 
 import numpy as np
 from astropy import units as u
@@ -19,7 +20,15 @@ from ..planning import (
     plan_pong_scan,
 )
 from ..site import Site
-from .models import BlockType, ObservingTimeline, TimelineBlock
+from .models import (
+    BlockType,
+    CEScanParams,
+    DaisyScanParams,
+    ObservingTimeline,
+    PongScanParams,
+    TimelineBlock,
+    validate_scan_params,
+)
 
 __all__ = [
     "accumulate_hitmaps",
@@ -97,6 +106,10 @@ def _generate_trajectory_for_block(
         If ``sblock.metadata`` is missing any of the required geometry
         keys (``ra_center``, ``dec_center``, ``width``, ``height``,
         ``velocity``).
+    KeyError
+        If ``scan_params`` contains keys not allowed for
+        ``sblock.scan_type`` (see
+        :func:`~fyst_trajectories.overhead.validate_scan_params`).
     """
     meta = sblock.metadata
     required = ("ra_center", "dec_center", "width", "height", "velocity")
@@ -104,10 +117,8 @@ def _generate_trajectory_for_block(
     if missing:
         raise ValueError(
             f"TimelineBlock metadata missing required keys {missing}. "
-            f"This usually means the timeline was loaded from an ECSV file "
-            f"written by an older version of fyst-trajectories that did not "
-            f"persist per-block scan geometry. Either regenerate the timeline "
-            f"with the current version, or provide the metadata explicitly."
+            f"Ensure the timeline was generated with per-block scan geometry, "
+            f"or provide the metadata explicitly."
         )
     ra_center = meta["ra_center"]
     dec_center = meta["dec_center"]
@@ -115,6 +126,12 @@ def _generate_trajectory_for_block(
     height = meta["height"]
     velocity = meta["velocity"]
     scan_params = meta.get("scan_params", {})
+
+    # Validate scan_params shape before dispatch. The ``cast(...)`` below
+    # is a no-op at runtime; without this check, typos like ``"radiu"``
+    # in a Daisy patch or a ``"spacing"`` key on a CE patch would fall
+    # through to the ``.get()`` default silently.
+    validate_scan_params(scan_params, sblock.scan_type)
 
     field = FieldRegion(
         ra_center=ra_center,
@@ -124,6 +141,7 @@ def _generate_trajectory_for_block(
     )
 
     if sblock.scan_type == "constant_el":
+        ce_params = cast(CEScanParams, scan_params)
         return plan_constant_el_scan(
             field=field,
             elevation=sblock.elevation,
@@ -131,34 +149,36 @@ def _generate_trajectory_for_block(
             site=site,
             start_time=sblock.t_start,
             rising=sblock.rising,
-            az_accel=scan_params.get("az_accel", 1.0),
-            timestep=scan_params.get("timestep", 0.1),
-            az_padding=scan_params.get("az_padding", 2.0),
+            az_accel=ce_params.get("az_accel", 1.0),
+            timestep=ce_params.get("timestep", 0.1),
+            az_padding=ce_params.get("az_padding", 2.0),
         )
     elif sblock.scan_type == "pong":
+        pong_params = cast(PongScanParams, scan_params)
         return plan_pong_scan(
             field=field,
             velocity=velocity,
-            spacing=scan_params.get("spacing", 0.1),
-            num_terms=scan_params.get("num_terms", 4),
+            spacing=pong_params.get("spacing", 0.1),
+            num_terms=pong_params.get("num_terms", 4),
             site=site,
             start_time=sblock.t_start,
-            timestep=scan_params.get("timestep", 0.1),
-            angle=scan_params.get("angle", 0.0),
-            n_cycles=scan_params.get("n_cycles", 1),
+            timestep=pong_params.get("timestep", 0.1),
+            angle=pong_params.get("angle", 0.0),
+            n_cycles=pong_params.get("n_cycles", 1),
         )
     elif sblock.scan_type == "daisy":
+        daisy_params = cast(DaisyScanParams, scan_params)
         return plan_daisy_scan(
             ra=ra_center,
             dec=dec_center,
-            radius=scan_params.get("radius", 1.0),
+            radius=daisy_params.get("radius", 1.0),
             velocity=velocity,
-            turn_radius=scan_params.get("turn_radius", 0.5),
-            avoidance_radius=scan_params.get("avoidance_radius", 0.1),
-            start_acceleration=scan_params.get("start_acceleration", 0.5),
+            turn_radius=daisy_params.get("turn_radius", 0.5),
+            avoidance_radius=daisy_params.get("avoidance_radius", 0.1),
+            start_acceleration=daisy_params.get("start_acceleration", 0.5),
             site=site,
             start_time=sblock.t_start,
-            timestep=scan_params.get("timestep", 0.1),
+            timestep=daisy_params.get("timestep", 0.1),
             duration=sblock.duration,
         )
     else:
@@ -207,6 +227,20 @@ def accumulate_hitmaps(
 
     npix = hp.nside2npix(nside)
     hitmap = np.zeros(npix, dtype=np.float64)
+    # Vacuum az/el → RA/Dec is correct *only when the trajectory was
+    # itself generated with vacuum coordinates*. Pattern generators
+    # (patterns/{daisy,pong,sidereal,planet}) accept a user-supplied
+    # ``atmosphere=`` and forward it to ``Coordinates``; if the
+    # trajectory was built with ``AtmosphericConditions.for_fyst()`` the
+    # az/el samples here are refracted and inverting them with vacuum
+    # introduces a small systematic (~arcseconds at zenith, up to ~1' at
+    # the horizon). For a healpix nside=512 hitmap (7' pixels) the error
+    # stays sub-pixel except very near the horizon, so the practical
+    # impact is bounded; the asymmetry remains for low-elevation, high-
+    # nside maps.
+    # TODO: thread the trajectory's atmospheric conditions through
+    # ``Trajectory`` metadata so the inverse uses the same refraction
+    # model. Tracked in post-implementation review (Code F4).
     coords = Coordinates(site)
 
     for sblock, scan_block in trajectory_pairs:

@@ -1,6 +1,5 @@
 """Scheduling constraints.
 
-Simple, composable constraint system inspired by SO schedlib's Rule pattern.
 Each constraint scores a candidate observation from 0.0 (infeasible) to 1.0
 (optimal). Scores are multiplied together by the scheduler.
 """
@@ -141,6 +140,19 @@ class SunAvoidanceConstraint(Constraint):
 class MoonAvoidanceConstraint(Constraint):
     """Enforce minimum angular separation from the Moon.
 
+    Notes
+    -----
+    Moon avoidance is asymmetric across the library by design:
+    the scheduler (this constraint) gates patch selection on lunar
+    proximity, but the planning helpers (``plan_pong_scan`` etc.)
+    do not run a moon-safety pre-flight check the way they do for
+    the Sun. This is intentional — at submillimetre wavelengths the
+    Moon is a useful calibration source (it is a bright, well-modelled
+    extended target), so total avoidance is not always desirable.
+    Callers who want a hard pre-flight moon check should query
+    ``coords.get_body_altaz("moon", obstime)`` and apply their own
+    threshold before constructing a trajectory.
+
     Parameters
     ----------
     min_angle : float
@@ -200,7 +212,6 @@ class MinDurationConstraint(Constraint):
         """
         future_time = time + TimeDelta(self.min_duration, format="sec")
         future_az, future_el = coords.radec_to_altaz(patch.ra_center, patch.dec_center, future_time)
-        # Check if still above minimum telescope elevation
         el_min = coords.site.telescope_limits.elevation.min
         if future_el < el_min:
             return 0.0

@@ -7,6 +7,7 @@ from fyst_trajectories.overhead.models import (
     BlockType,
     CalibrationPolicy,
     CalibrationSpec,
+    CalibrationType,
     ObservingPatch,
     ObservingTimeline,
     OverheadModel,
@@ -84,6 +85,28 @@ class TestCalibrationSpec:
             CalibrationSpec(name="retune", duration=-1.0)
 
 
+class TestCalibrationTypeFieldMappings:
+    """Tests for the ``duration_field`` / ``state_field`` mappings."""
+
+    def test_duration_field_resolves_on_overhead_model(self):
+        """Every CalibrationType's duration_field must name an OverheadModel attribute."""
+        model = OverheadModel()
+        for cal_type in CalibrationType:
+            # property returns an attribute name, getattr must resolve.
+            value = getattr(model, cal_type.duration_field)
+            assert value == model.get_calibration_duration(cal_type)
+
+    def test_state_field_round_trip(self):
+        """``state.update(CAL, t)`` must populate the attribute named by state_field."""
+        from fyst_trajectories.overhead import CalibrationState
+
+        t = Time("2026-06-15T02:00:00", scale="utc")
+        for cal_type in CalibrationType:
+            state = CalibrationState()
+            new_state = state.update(cal_type, t)
+            assert getattr(new_state, cal_type.state_field) == t
+
+
 class TestTimelineBlock:
     """Tests for TimelineBlock dataclass."""
 
@@ -95,8 +118,8 @@ class TestTimelineBlock:
             t_stop=t1,
             block_type="science",
             patch_name="test",
-            az_min=100.0,
-            az_max=200.0,
+            az_start=100.0,
+            az_end=200.0,
             elevation=50.0,
             scan_index=0,
         )
@@ -110,8 +133,8 @@ class TestTimelineBlock:
                 t_stop=t0,
                 block_type="invalid",
                 patch_name="test",
-                az_min=0.0,
-                az_max=0.0,
+                az_start=0.0,
+                az_end=0.0,
                 elevation=0.0,
                 scan_index=0,
             )
@@ -124,8 +147,8 @@ class TestTimelineBlock:
             t_stop=t0 + TimeDelta(60, format="sec"),
             block_type="science",
             patch_name="test",
-            az_min=0.0,
-            az_max=0.0,
+            az_start=0.0,
+            az_end=0.0,
             elevation=0.0,
             scan_index=0,
         )
@@ -141,57 +164,153 @@ class TestTimelineBlock:
             t_stop=t0 + TimeDelta(60, format="sec"),
             block_type=BlockType.CALIBRATION,
             patch_name="test",
-            az_min=0.0,
-            az_max=0.0,
+            az_start=0.0,
+            az_end=0.0,
             elevation=0.0,
             scan_index=0,
         )
         assert block.block_type is BlockType.CALIBRATION
 
-    def test_boresight_angle_default(self):
-        """boresight_angle defaults to 0.0."""
-        t0 = Time("2026-06-15T02:00:00", scale="utc")
-        block = TimelineBlock(
-            t_start=t0,
-            t_stop=t0 + TimeDelta(60, format="sec"),
-            block_type="science",
-            patch_name="test",
-            az_min=0.0,
-            az_max=0.0,
-            elevation=0.0,
-            scan_index=0,
-        )
-        assert block.boresight_angle == 0.0
 
-    def test_boresight_angle_stored(self):
-        """boresight_angle is preserved when provided."""
-        t0 = Time("2026-06-15T02:00:00", scale="utc")
-        block = TimelineBlock(
+class TestTimelineBlockFactories:
+    """Tests for the TimelineBlock factory classmethods."""
+
+    def _t0(self) -> Time:
+        return Time("2026-06-15T02:00:00", scale="utc")
+
+    def test_calibration_factory(self, site):
+        t0 = self._t0()
+        block = TimelineBlock.calibration(
+            cal_type="pointing_cal",
             t_start=t0,
-            t_stop=t0 + TimeDelta(60, format="sec"),
-            block_type="science",
-            patch_name="test",
-            az_min=0.0,
-            az_max=0.0,
-            elevation=0.0,
-            scan_index=0,
-            boresight_angle=42.5,
+            duration=180.0,
+            az=120.0,
+            el=45.0,
+            site=site,
+            scan_index=3,
+            target=None,
         )
-        assert block.boresight_angle == 42.5
+        assert block.block_type is BlockType.CALIBRATION
+        assert block.patch_name == "pointing_cal"
+        assert block.scan_type == "pointing_cal"
+        assert block.az_start == block.az_end == 120.0
+        assert block.elevation == 45.0
+        assert block.scan_index == 3
+        assert abs(block.duration - 180.0) < 0.01
+        assert block.metadata == {"cal_type": "pointing_cal", "target": None}
+
+    def test_calibration_factory_accepts_enum_and_target(self, site):
+        t0 = self._t0()
+        block = TimelineBlock.calibration(
+            cal_type=CalibrationType.PLANET_CAL,
+            t_start=t0,
+            duration=600.0,
+            az=90.0,
+            el=30.0,
+            site=site,
+            scan_index=0,
+            target="jupiter",
+        )
+        assert block.patch_name == "planet_cal"
+        assert block.metadata == {"cal_type": "planet_cal", "target": "jupiter"}
+
+    def test_idle_factory(self, site):
+        t0 = self._t0()
+        block = TimelineBlock.idle(
+            t_start=t0,
+            duration=60.0,
+            az=10.0,
+            el=20.0,
+            site=site,
+            scan_index=7,
+        )
+        assert block.block_type is BlockType.IDLE
+        assert block.patch_name == "no_target"
+        assert block.scan_type == "idle"
+        assert block.az_start == block.az_end == 10.0
+        assert block.elevation == 20.0
+        assert block.scan_index == 7
+        assert abs(block.duration - 60.0) < 0.01
+
+    def test_slew_factory(self, site):
+        t0 = self._t0()
+        block = TimelineBlock.slew(
+            t_start=t0,
+            duration=25.0,
+            az_start=100.0,
+            az_end=160.0,
+            el=40.0,
+            site=site,
+            scan_index=2,
+            patch_name="slew_to_deep56",
+        )
+        assert block.block_type is BlockType.SLEW
+        assert block.patch_name == "slew_to_deep56"
+        assert block.scan_type == "slew"
+        assert block.az_start == 100.0
+        assert block.az_end == 160.0
+        assert block.elevation == 40.0
+        assert abs(block.duration - 25.0) < 0.01
+
+    def test_science_factory(self, site):
+        t0 = self._t0()
+        patch = ObservingPatch(
+            name="deep56",
+            ra_center=55.0,
+            dec_center=-27.0,
+            width=5.0,
+            height=6.0,
+            scan_type="constant_el",
+            velocity=1.0,
+        )
+        block = TimelineBlock.science(
+            patch=patch,
+            t_start=t0,
+            duration=600.0,
+            az_start=80.0,
+            az_end=120.0,
+            el=55.0,
+            site=site,
+            scan_index=4,
+            subscan_index=2,
+            rising=False,
+        )
+        assert block.block_type is BlockType.SCIENCE
+        assert block.patch_name == "deep56"
+        assert block.scan_type == "constant_el"
+        assert block.az_start == 80.0
+        assert block.az_end == 120.0
+        assert block.elevation == 55.0
+        assert block.scan_index == 4
+        assert block.subscan_index == 2
+        assert block.rising is False
+        assert block.metadata["ra_center"] == 55.0
+        assert block.metadata["dec_center"] == -27.0
+        assert block.metadata["width"] == 5.0
+        assert block.metadata["height"] == 6.0
+        assert block.metadata["velocity"] == 1.0
+
+    def test_retune_factory(self, site):
+        t0 = self._t0()
+        block = TimelineBlock.retune(
+            t_start=t0,
+            duration=5.0,
+            az_start=100.0,
+            az_end=160.0,
+            el=45.0,
+            site=site,
+            scan_index=1,
+        )
+        assert block.block_type is BlockType.CALIBRATION
+        assert block.patch_name == "retune"
+        assert block.scan_type == "retune"
+        assert block.az_start == 100.0
+        assert block.az_end == 160.0
+        assert abs(block.duration - 5.0) < 0.01
 
 
 class TestBlockType:
     """Tests for the BlockType enum."""
-
-    def test_values(self):
-        assert BlockType.SCIENCE.value == "science"
-        assert BlockType.CALIBRATION.value == "calibration"
-        assert BlockType.SLEW.value == "slew"
-        assert BlockType.IDLE.value == "idle"
-
-    def test_str(self):
-        assert str(BlockType.SCIENCE) == "science"
-        assert str(BlockType.IDLE) == "idle"
 
     def test_equals_string(self):
         """BlockType inherits from str so == string comparisons work."""
@@ -217,7 +336,7 @@ class TestOverheadModel:
 
     def test_get_calibration_duration_unknown(self):
         model = OverheadModel()
-        with pytest.raises(ValueError, match="not a valid CalibrationType"):
+        with pytest.raises(ValueError, match="Unknown calibration type"):
             model.get_calibration_duration("invalid")
 
 
@@ -227,6 +346,57 @@ class TestCalibrationPolicy:
     def test_negative_cadence(self):
         with pytest.raises(ValueError, match="non-negative"):
             CalibrationPolicy(pointing_cadence=-1.0)
+
+    def test_beam_map_cadence_default_is_none(self):
+        """``beam_map_cadence`` defaults to ``None`` (manual-only)."""
+        policy = CalibrationPolicy()
+        assert policy.beam_map_cadence is None
+
+    def test_beam_map_cadence_negative_rejected(self):
+        with pytest.raises(ValueError, match="beam_map_cadence"):
+            CalibrationPolicy(beam_map_cadence=-1.0)
+
+    def test_beam_map_cadence_zero_allowed(self):
+        """A zero cadence is allowed (always due) — same as the others."""
+        policy = CalibrationPolicy(beam_map_cadence=0.0)
+        assert policy.beam_map_cadence == 0.0
+
+
+class TestBeamMapScheduling:
+    """Tests for BEAM_MAP first-class scheduling behaviour."""
+
+    def test_default_policy_skips_beam_map(self):
+        """With ``beam_map_cadence=None`` no automatic beam map is scheduled."""
+        from fyst_trajectories.overhead import CalibrationState
+
+        state = CalibrationState()
+        policy = CalibrationPolicy()  # beam_map_cadence is None by default
+        overhead = OverheadModel()
+        t = Time("2026-06-15T02:00:00", scale="utc")
+        needed = state.needs_calibration(t, policy, overhead, coords=None)
+        assert all(spec.name != CalibrationType.BEAM_MAP for spec in needed)
+
+    def test_explicit_cadence_schedules_beam_map(self):
+        """Setting ``beam_map_cadence`` adds beam maps to ``needs_calibration``."""
+        from fyst_trajectories.overhead import CalibrationState
+
+        state = CalibrationState()
+        policy = CalibrationPolicy(beam_map_cadence=86400.0)
+        overhead = OverheadModel()
+        t = Time("2026-06-15T02:00:00", scale="utc")
+        needed = state.needs_calibration(t, policy, overhead, coords=None)
+        beam_specs = [spec for spec in needed if spec.name == CalibrationType.BEAM_MAP]
+        assert len(beam_specs) == 1
+        assert beam_specs[0].duration == overhead.beam_map_duration
+
+    def test_beam_map_state_round_trip(self):
+        """``CalibrationState.update("beam_map", t)`` populates ``last_beam_map``."""
+        from fyst_trajectories.overhead import CalibrationState
+
+        state = CalibrationState()
+        t = Time("2026-06-15T02:00:00", scale="utc")
+        new_state = state.update("beam_map", t)
+        assert new_state.last_beam_map == t
 
 
 class TestObservingTimeline:
@@ -255,8 +425,8 @@ class TestObservingTimeline:
             t_stop=t0 + TimeDelta(500, format="sec"),
             block_type="science",
             patch_name="test",
-            az_min=100.0,
-            az_max=200.0,
+            az_start=100.0,
+            az_end=200.0,
             elevation=50.0,
             scan_index=0,
         )
@@ -265,8 +435,8 @@ class TestObservingTimeline:
             t_stop=t0 + TimeDelta(600, format="sec"),
             block_type="calibration",
             patch_name="retune",
-            az_min=100.0,
-            az_max=100.0,
+            az_start=100.0,
+            az_end=100.0,
             elevation=50.0,
             scan_index=0,
         )
@@ -289,8 +459,8 @@ class TestObservingTimeline:
             t_stop=t0 + TimeDelta(500, format="sec"),
             block_type="science",
             patch_name="test",
-            az_min=100.0,
-            az_max=200.0,
+            az_start=100.0,
+            az_end=200.0,
             elevation=50.0,
             scan_index=0,
         )
@@ -313,8 +483,8 @@ class TestObservingTimeline:
             t_stop=t0 + TimeDelta(600, format="sec"),
             block_type="science",
             patch_name="a",
-            az_min=100.0,
-            az_max=200.0,
+            az_start=100.0,
+            az_end=200.0,
             elevation=50.0,
             scan_index=0,
         )
@@ -323,8 +493,8 @@ class TestObservingTimeline:
             t_stop=t0 + TimeDelta(800, format="sec"),
             block_type="science",
             patch_name="b",
-            az_min=100.0,
-            az_max=200.0,
+            az_start=100.0,
+            az_end=200.0,
             elevation=50.0,
             scan_index=1,
         )

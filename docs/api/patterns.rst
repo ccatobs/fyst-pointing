@@ -6,7 +6,7 @@ Scan pattern implementations for telescope trajectory generation.
 Overview
 --------
 
-Use ``TrajectoryBuilder`` with config objects to generate trajectories.
+``TrajectoryBuilder`` generates trajectories from config objects.
 The pattern type is automatically inferred from the config class::
 
     from astropy.time import Time
@@ -172,6 +172,7 @@ For interactive discovery or dynamic scenarios where pattern names are
 determined at runtime::
 
     from fyst_trajectories import list_patterns, get_pattern
+    from fyst_trajectories.patterns import PongScanConfig, get_pattern_for_config
 
     # List available patterns
     print(list_patterns())
@@ -179,8 +180,28 @@ determined at runtime::
     # Get pattern class by name (useful for plugins or config-driven selection)
     PatternClass = get_pattern("pong")
 
+    # Get pattern class from a config instance (used by TrajectoryBuilder)
+    PatternClass = get_pattern_for_config(PongScanConfig)
+
 .. autofunction:: fyst_trajectories.patterns.list_patterns
 
 .. autofunction:: fyst_trajectories.patterns.get_pattern
 
+.. autofunction:: fyst_trajectories.patterns.get_pattern_for_config
+
 .. autofunction:: fyst_trajectories.patterns.register_pattern
+
+Geometry Helpers
+----------------
+
+.. autofunction:: fyst_trajectories.patterns.compute_pong_period
+
+Boundary-Error Handling
+-----------------------
+
+When a trajectory exceeds telescope limits, a
+:class:`~fyst_trajectories.exceptions.TargetNotObservableError` is raised
+identifying the target and start time. Custom pattern authors should use
+``wrap_bounds_error`` for consistent error messages.
+
+.. autofunction:: fyst_trajectories.patterns.utils.wrap_bounds_error

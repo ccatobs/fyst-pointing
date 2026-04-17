@@ -7,6 +7,17 @@ for coordinate transforms, site configuration, and trajectory generation.
 The key entry point is :func:`generate_timeline`, which takes a list of
 observing patches and produces a complete timeline with calibration injection.
 
+.. note::
+
+   The retune events emitted by :class:`CalibrationPolicy` (between
+   subscans / iterations) are independent of the in-scan retune samples
+   that :func:`fyst_trajectories.inject_retune` injects on a single
+   :class:`~fyst_trajectories.trajectory.Trajectory`. The two layers own
+   different retune timing knobs (operations team vs instrument team — see
+   :doc:`overhead_integration`); a workflow that applies
+   :func:`~fyst_trajectories.inject_retune` and then schedules the result
+   through this subpackage will see retune flags from both systems.
+
 Examples
 --------
 Generate a one-night timeline:
@@ -52,13 +63,22 @@ from .constraints import (
 from .io import read_timeline, write_timeline
 from .models import (
     BlockType,
+    CalibrationBlockMetadata,
     CalibrationPolicy,
     CalibrationSpec,
     CalibrationType,
+    CEScanParams,
+    DaisyScanParams,
+    EmptyBlockMetadata,
     ObservingPatch,
     ObservingTimeline,
     OverheadModel,
+    PongScanParams,
+    ScanParamsDict,
+    ScienceBlockMetadata,
     TimelineBlock,
+    TimelineBlockMetadata,
+    validate_scan_params,
 )
 from .overhead import CalibrationState
 from .simulation import (
@@ -68,6 +88,7 @@ from .simulation import (
 )
 from .timeline import generate_timeline
 from .utils import (
+    compute_nasmyth_rotation,
     estimate_slew_time,
     get_max_elevation,
     get_observable_windows,
@@ -76,21 +97,30 @@ from .utils import (
 
 __all__ = [
     "BlockType",
+    "CEScanParams",
+    "CalibrationBlockMetadata",
     "CalibrationPolicy",
     "CalibrationState",
     "CalibrationSpec",
     "CalibrationType",
     "Constraint",
+    "DaisyScanParams",
     "ElevationConstraint",
+    "EmptyBlockMetadata",
     "MinDurationConstraint",
     "MoonAvoidanceConstraint",
     "ObservingPatch",
     "ObservingTimeline",
     "OverheadModel",
+    "PongScanParams",
+    "ScanParamsDict",
+    "ScienceBlockMetadata",
     "SunAvoidanceConstraint",
     "TimelineBlock",
+    "TimelineBlockMetadata",
     "accumulate_hitmaps",
     "compute_budget",
+    "compute_nasmyth_rotation",
     "estimate_slew_time",
     "generate_timeline",
     "get_max_elevation",
@@ -98,5 +128,6 @@ __all__ = [
     "get_transit_time",
     "read_timeline",
     "schedule_to_trajectories",
+    "validate_scan_params",
     "write_timeline",
 ]

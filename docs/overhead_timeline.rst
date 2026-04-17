@@ -51,7 +51,13 @@ Supported ``scan_type`` values: ``"constant_el"``, ``"pong"``, ``"daisy"``.
 Custom CalibrationPolicy
 ------------------------
 
-Control how often calibrations are injected::
+Control how often calibrations are injected. The default
+``pointing_cadence`` is ``3600.0`` s (1 hr); the example below
+tightens it to 1800 s as a *commissioning override* suitable for
+early operations when pointing drift is still being characterised.
+See :doc:`overhead_model` for all available cadence parameters.
+
+::
 
     from fyst_trajectories import get_fyst_site
     from fyst_trajectories.overhead import (
@@ -63,10 +69,12 @@ Control how often calibrations are injected::
 
     site = get_fyst_site()
 
-    # Aggressive calibration: pointing every 30 min, focus every hour
+    # Aggressive calibration (commissioning override): pointing every
+    # 30 min, focus every hour. Overrides the default pointing_cadence
+    # of 3600 s.
     policy = CalibrationPolicy(
         retune_cadence=0.0,          # every scan boundary
-        pointing_cadence=1800.0,     # 30 min
+        pointing_cadence=1800.0,     # 30 min (override of 3600 s default)
         focus_cadence=3600.0,        # 1 hour
         skydip_cadence=7200.0,       # 2 hours
         planet_cal_cadence=43200.0,  # 12 hours
@@ -153,10 +161,31 @@ Inspect individual blocks::
             f"{block.patch_name:15s} | {block.duration:7.0f}s"
         )
 
+Regenerating Trajectories
+-------------------------
+
+A timeline stores scan geometry in ``block.metadata``, not motion arrays.
+To rebuild az/el/time arrays for every science block (e.g. for coverage
+simulation or to stream to OCS),
+:func:`~fyst_trajectories.overhead.schedule_to_trajectories` iterates the
+timeline, calls the appropriate ``plan_*_scan`` function for each science
+block, and yields ``(TimelineBlock, ScanBlock)`` pairs. Blocks that are
+no longer feasible at execution time (e.g. because of drifting
+elevation) are logged and skipped rather than raising.
+
+::
+
+    from fyst_trajectories.overhead import schedule_to_trajectories
+
+    results = schedule_to_trajectories(timeline)
+    for timeline_block, scan_block in results:
+        traj = scan_block.trajectory
+        # feed traj.az, traj.el, traj.times into coverage or upload code
+
 Validation
 ----------
 
-Check a timeline for overlapping blocks or out-of-range entries::
+A timeline can be checked for overlapping blocks or out-of-range entries::
 
     warnings = timeline.validate()
     if warnings:

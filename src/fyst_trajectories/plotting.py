@@ -181,7 +181,7 @@ def plot_hit_map(
     from .offsets import boresight_to_detector, compute_focal_plane_rotation
     from .trajectory_utils import get_absolute_times
 
-    coords = Coordinates(site, atmosphere=None)
+    coords = Coordinates(site)
     abs_times = get_absolute_times(trajectory)
 
     if trajectory.center_ra is not None and trajectory.center_dec is not None:
@@ -205,7 +205,6 @@ def plot_hit_map(
     axes = axes[0]
 
     for ax, (offset, label) in zip(axes, offsets):
-        # Compute field rotation for this offset
         fr = compute_focal_plane_rotation(
             trajectory.el,
             site,
@@ -213,7 +212,6 @@ def plot_hit_map(
             parallactic_angle=pa,
         )
 
-        # Compute detector Az/El track
         det_az, det_el = boresight_to_detector(
             trajectory.az,
             trajectory.el,
@@ -221,7 +219,6 @@ def plot_hit_map(
             fr,
         )
 
-        # Convert to RA/Dec
         ra, dec = coords.altaz_to_radec(det_az, det_el, obstime=abs_times)
 
         ra = np.asarray(ra, dtype=float)

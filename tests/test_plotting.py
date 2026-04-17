@@ -151,15 +151,6 @@ class TestPlotTrajectory:
         # plot_trajectory creates a 3-panel figure (az/t, el/t, sky track).
         assert len(fig.axes) == 3
 
-    def test_trajectory_plot_method_delegates(self):
-        """Trajectory.plot() should delegate to plot_trajectory and return a Figure."""
-        trajectory = _make_simple_trajectory(with_start_time=False)
-
-        fig = trajectory.plot(show=False)
-
-        assert isinstance(fig, Figure)
-        assert len(fig.axes) == 3
-
     def test_returns_figure_with_start_time(self):
         """plot_trajectory ignores start_time and still returns a Figure."""
         trajectory = _make_simple_trajectory(with_start_time=True)

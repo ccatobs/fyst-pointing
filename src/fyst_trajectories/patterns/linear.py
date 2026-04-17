@@ -14,7 +14,7 @@ from .configs import LinearMotionConfig
 from .registry import register_pattern
 
 
-@register_pattern("linear")
+@register_pattern("linear", config=LinearMotionConfig)
 class LinearMotionPattern(AltAzPattern):
     """Linear motion pattern with constant velocity.
 

@@ -15,14 +15,18 @@ from astropy import units as u
 from astropy.time import Time, TimeDelta
 
 from ..coordinates import Coordinates
-from ..exceptions import TargetNotObservableError, TrajectoryBoundsError
 from ..site import AtmosphericConditions, Site
 from ..trajectory import SCAN_FLAG_SCIENCE, SCAN_FLAG_TURNAROUND, Trajectory
 from ..trajectory_utils import validate_trajectory_bounds
 from .base import CelestialPattern, TrajectoryMetadata
 from .configs import PongScanConfig
 from .registry import register_pattern
-from .utils import compute_velocities, normalize_azimuth, sky_offsets_to_altaz
+from .utils import (
+    compute_velocities,
+    normalize_azimuth,
+    sky_offsets_to_altaz,
+    wrap_bounds_error,
+)
 
 _TURNAROUND_SPEED_THRESHOLD: float = 0.8
 """Fraction of nominal velocity below which samples are flagged as turnaround.
@@ -30,14 +34,28 @@ _TURNAROUND_SPEED_THRESHOLD: float = 0.8
 Samples with offset-frame speed below ``threshold * config.velocity`` are
 classified as SCAN_FLAG_TURNAROUND.
 
-Empirical turnaround threshold: 0.8 captures the slowing region of the
-Fourier-truncated triangle wave near vertices. No published cross-facility
-standard exists for this exact value; it is a design choice tuned for
-FYST/Prime-Cam scan dynamics.
+The 0.8 threshold is empirical and matches the natural speed reduction
+at the vertices of a Fourier-truncated triangle wave with the default
+``num_terms = 4`` (harmonics 1, 3, 5, 7 give a peak velocity at the
+midpoint and a ~80% velocity at the vertex). Increasing ``num_terms``
+sharpens the corners and may require this threshold to be lowered;
+decreasing it does the opposite.
+
+No published cross-facility standard exists for this exact value.
+SO classifies turnarounds geometrically (samples outside the science
+azimuth range — see Hoang et al. 2024); JCMT uses a similar geometric
+criterion. The speed-based criterion here is closer to ACT's
+time-window approach but tuned for FYST/Prime-Cam scan dynamics.
 """
 
 
-@functools.lru_cache(maxsize=4)
+# Cache size 32 comfortably covers a planning session that iterates over many
+# distinct (width, height, spacing) tuples (e.g. an outer loop over patches
+# with different field geometries, or a multi-rotation pong sequence with
+# differing footprints). Each cache entry is a 4-tuple of ints/floats, so the
+# memory cost is negligible; raising the bound trades small cache footprint
+# for a guaranteed hit rate across realistic workflows.
+@functools.lru_cache(maxsize=32)
 def _compute_pong_vertices(
     width: float, height: float, spacing: float
 ) -> tuple[int, int, float, float]:
@@ -94,7 +112,55 @@ def _compute_pong_vertices(
     return x_numvert, y_numvert, amp_x, amp_y
 
 
-@register_pattern("pong")
+def compute_pong_period(config: PongScanConfig) -> tuple[float, int, int]:
+    """Compute the fundamental period of a Pong scan and its vertex counts.
+
+    The Pong pattern uses two Fourier-approximated triangle waves whose
+    periods are coprime, so the pattern repeats only after
+    ``x_numvert * y_numvert`` turnarounds of the faster axis. This helper
+    computes that period (and the vertex counts) without instantiating
+    a :class:`PongScanPattern`.
+
+    This is the canonical entry point for external code (e.g. the
+    scan_patterns cross-validation reference) that needs the period
+    implied by a :class:`PongScanConfig`.
+
+    Parameters
+    ----------
+    config : PongScanConfig
+        The Pong scan configuration.
+
+    Returns
+    -------
+    period : float
+        The fundamental period of the Pong pattern in seconds.
+    x_numvert : int
+        Number of vertices along the x axis.
+    y_numvert : int
+        Number of vertices along the y axis.
+
+    Examples
+    --------
+    >>> from fyst_trajectories.patterns import PongScanConfig, compute_pong_period
+    >>> cfg = PongScanConfig(
+    ...     timestep=0.1,
+    ...     width=2.0,
+    ...     height=2.0,
+    ...     spacing=0.1,
+    ...     velocity=0.5,
+    ...     num_terms=4,
+    ...     angle=0.0,
+    ... )
+    >>> period, nx, ny = compute_pong_period(cfg)
+    """
+    x_numvert, y_numvert, _, _ = _compute_pong_vertices(config.width, config.height, config.spacing)
+    vert_spacing = math.sqrt(2) * config.spacing
+    vavg = config.velocity / math.sqrt(2)
+    period = x_numvert * y_numvert * vert_spacing * 2 / vavg
+    return period, x_numvert, y_numvert
+
+
+@register_pattern("pong", config=PongScanConfig)
 class PongScanPattern(CelestialPattern):
     """Pong scan pattern for uniform rectangular coverage.
 
@@ -246,9 +312,8 @@ class PongScanPattern(CelestialPattern):
 
         times, x_offsets, y_offsets = self.generate_offsets(duration)
 
-        # Compute scan_flag from offset-frame velocities.
-        # Turnaround regions are where speed drops below 80% of nominal,
-        # indicating the pattern is reversing direction near a vertex.
+        # Flag turnaround samples using offset-frame speed so the threshold
+        # is independent of elevation (az coordinate velocity varies with cos(el)).
         x_vel = np.gradient(x_offsets, times)
         y_vel = np.gradient(y_offsets, times)
         speed = np.sqrt(x_vel**2 + y_vel**2)
@@ -270,14 +335,8 @@ class PongScanPattern(CelestialPattern):
         az_vel = compute_velocities(az, times, is_angular=True)
         el_vel = compute_velocities(el, times, is_angular=False)
 
-        try:
+        with wrap_bounds_error(f"RA={self.ra:.3f} Dec={self.dec:.3f}", start_time.iso):
             validate_trajectory_bounds(site, az, el)
-        except TrajectoryBoundsError as exc:
-            raise TargetNotObservableError(
-                target=f"RA={self.ra:.3f} Dec={self.dec:.3f}",
-                time_info=start_time.iso,
-                bounds_error=exc,
-            ) from None
 
         return Trajectory(
             times=times,

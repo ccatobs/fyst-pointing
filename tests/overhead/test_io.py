@@ -14,7 +14,6 @@ from fyst_trajectories.overhead import (
     schedule_to_trajectories,
 )
 from fyst_trajectories.overhead.io import (
-    _nasmyth_rotation,
     read_timeline,
     write_timeline,
 )
@@ -25,6 +24,7 @@ from fyst_trajectories.overhead.models import (
     OverheadModel,
     TimelineBlock,
 )
+from fyst_trajectories.overhead.utils import compute_nasmyth_rotation
 
 
 def _make_test_timeline():
@@ -39,8 +39,8 @@ def _make_test_timeline():
             t_stop=t0 + TimeDelta(300, format="sec"),
             block_type="calibration",
             patch_name="retune",
-            az_min=180.0,
-            az_max=180.0,
+            az_start=180.0,
+            az_end=180.0,
             elevation=50.0,
             scan_index=0,
             scan_type="retune",
@@ -50,8 +50,8 @@ def _make_test_timeline():
             t_stop=t0 + TimeDelta(2100, format="sec"),
             block_type="science",
             patch_name="deep_field",
-            az_min=120.0,
-            az_max=240.0,
+            az_start=120.0,
+            az_end=240.0,
             elevation=50.0,
             scan_index=1,
             rising=True,
@@ -70,8 +70,8 @@ def _make_test_timeline():
             t_stop=t0 + TimeDelta(2105, format="sec"),
             block_type="calibration",
             patch_name="retune",
-            az_min=240.0,
-            az_max=240.0,
+            az_start=240.0,
+            az_end=240.0,
             elevation=50.0,
             scan_index=2,
             scan_type="retune",
@@ -198,41 +198,6 @@ class TestCanonicalColumnNames:
         first = str(table["start_time"][0])
         # ISO format looks like "2026-06-15 02:00:00.000"
         assert "2026-06-15" in first
-
-    def test_reads_legacy_column_names(self, tmp_path):
-        """Files with legacy column names must still round-trip."""
-        site = get_fyst_site()
-        t0 = Time("2026-06-15T02:00:00", scale="utc")
-        # Build a minimal legacy-format ECSV by hand.
-        rows = [
-            {
-                "start_timestamp": t0.mjd,
-                "stop_timestamp": (t0 + TimeDelta(300, format="sec")).mjd,
-                "boresight_angle": 0.0,
-                "name": "legacy",
-                "azmin": 100.0,
-                "azmax": 200.0,
-                "el": 50.0,
-                "scan": 0,
-                "subscan": 0,
-                "block_type": "science",
-                "scan_type": "pong",
-                "rising": True,
-            }
-        ]
-        table = Table(rows)
-        table.meta["site_name"] = site.name
-        table.meta["site_lat"] = site.latitude
-        table.meta["site_lon"] = site.longitude
-        table.meta["site_alt"] = site.elevation
-        path = tmp_path / "legacy.ecsv"
-        table.write(str(path), format="ascii.ecsv", overwrite=True)
-
-        loaded = read_timeline(path)
-        assert len(loaded.blocks) == 1
-        assert loaded.blocks[0].patch_name == "legacy"
-        assert loaded.blocks[0].scan_index == 0
-        assert loaded.blocks[0].subscan_index == 0
 
 
 class TestMetadataPersistence:
@@ -365,8 +330,8 @@ class TestSiteReconstruction:
                     t_stop=t0 + TimeDelta(60, format="sec"),
                     block_type="idle",
                     patch_name="noop",
-                    az_min=180.0,
-                    az_max=180.0,
+                    az_start=180.0,
+                    az_end=180.0,
                     elevation=50.0,
                     scan_index=0,
                 )
@@ -394,14 +359,14 @@ class TestBoresightAngle:
         # Construct a block with a known nonzero boresight_angle.
         az = 120.0
         el = 55.0
-        expected = _nasmyth_rotation(az, el, site)
+        expected = compute_nasmyth_rotation(az, el, site)
         block = TimelineBlock(
             t_start=t0,
             t_stop=t0 + TimeDelta(60, format="sec"),
             block_type="science",
             patch_name="bore",
-            az_min=az - 5,
-            az_max=az + 5,
+            az_start=az - 5,
+            az_end=az + 5,
             elevation=el,
             scan_index=0,
             scan_type="pong",
@@ -432,7 +397,7 @@ class TestBoresightAngle:
 
 
 class TestNasmythConsistency:
-    """Arch-16: _nasmyth_rotation matches Coordinates.get_parallactic_angle.
+    """Arch-16: compute_nasmyth_rotation matches Coordinates.get_parallactic_angle.
 
     The two implementations use different input variables (AltAz vs HA)
     but share the same underlying spherical trigonometry for the
@@ -486,8 +451,8 @@ class TestNasmythConsistency:
             pa_ha_deg = math.degrees(math.atan2(numerator_ha, denominator_ha))
             ha_bangle = site.nasmyth_sign * el_deg + pa_ha_deg
 
-            # AltAz-based equivalent (what _nasmyth_rotation computes).
-            altaz_bangle = _nasmyth_rotation(az_deg, el_deg, site)
+            # AltAz-based equivalent (what compute_nasmyth_rotation computes).
+            altaz_bangle = compute_nasmyth_rotation(az_deg, el_deg, site)
 
             diff = math.fmod(altaz_bangle - ha_bangle + 540.0, 360.0) - 180.0
             assert abs(diff) < 1e-9, (
@@ -514,7 +479,7 @@ class TestNasmythConsistency:
         az, el = coords.radec_to_altaz(ra, dec, time)
         pa = coords.get_parallactic_angle(ra, dec, time)
 
-        altaz_bangle = _nasmyth_rotation(float(az), float(el), site)
+        altaz_bangle = compute_nasmyth_rotation(float(az), float(el), site)
         ha_bangle = site.nasmyth_sign * float(el) + float(pa)
         diff = math.fmod(altaz_bangle - ha_bangle + 540.0, 360.0) - 180.0
         # Loose tolerance because astropy applies frame corrections.
@@ -525,5 +490,279 @@ class TestNasmythConsistency:
         site = get_fyst_site()
         # At zero azimuth and due south, numerator -sin(az)*cos(lat) = 0
         # → PA is 0 or 180 depending on the denominator sign.
-        bangle = _nasmyth_rotation(0.0, 45.0, site)
+        bangle = compute_nasmyth_rotation(0.0, 45.0, site)
         assert np.isfinite(bangle)
+
+
+class TestOverheadModelRoundTrip:
+    """All OverheadModel fields must survive an ECSV write/read round-trip."""
+
+    def test_all_overhead_fields_round_trip(self, tmp_path):
+        """Every OverheadModel field must be restored from ECSV metadata.
+
+        Constructs every field with a value distinct from the class
+        default (and distinct from every *other* field's default) so a
+        future field that is added without the corresponding I/O wiring
+        — like the BEAM_MAP regression — fails loudly instead of
+        coincidentally matching a default on the read side.
+        """
+        import dataclasses
+
+        site = get_fyst_site()
+        t0 = Time("2026-06-15T02:00:00", scale="utc")
+
+        # Use non-default values for every field so we can detect missing ones.
+        overhead = OverheadModel(
+            retune_duration=7.0,
+            pointing_cal_duration=200.0,
+            focus_duration=350.0,
+            skydip_duration=400.0,
+            planet_cal_duration=700.0,
+            beam_map_duration=999.0,  # non-default to catch missing serialisation
+            settle_time=8.0,
+            min_scan_duration=90.0,
+            max_scan_duration=4000.0,
+        )
+
+        # Sanity check that every field truly differs from the class default,
+        # so the test is genuinely round-trip-sensitive for every field.
+        defaults = OverheadModel()
+        for fld in dataclasses.fields(OverheadModel):
+            assert getattr(overhead, fld.name) != getattr(defaults, fld.name), (
+                f"Test setup bug: OverheadModel.{fld.name} matches class default; "
+                f"the round-trip test cannot detect a serialisation gap on this field."
+            )
+
+        timeline = ObservingTimeline(
+            blocks=[
+                TimelineBlock(
+                    t_start=t0,
+                    t_stop=t0 + TimeDelta(60, format="sec"),
+                    block_type="idle",
+                    patch_name="noop",
+                    az_start=180.0,
+                    az_end=180.0,
+                    elevation=50.0,
+                    scan_index=0,
+                )
+            ],
+            site=site,
+            start_time=t0,
+            end_time=t0 + TimeDelta(60, format="sec"),
+            overhead_model=overhead,
+            calibration_policy=CalibrationPolicy(),
+        )
+
+        path = tmp_path / "overhead_rt.ecsv"
+        write_timeline(timeline, path)
+        loaded = read_timeline(path)
+
+        for fld in dataclasses.fields(OverheadModel):
+            original = getattr(overhead, fld.name)
+            loaded_val = getattr(loaded.overhead_model, fld.name)
+            assert loaded_val == pytest.approx(original), (
+                f"OverheadModel.{fld.name}: wrote {original}, read back {loaded_val}"
+            )
+
+
+class TestCalibrationPolicyRoundTrip:
+    """All CalibrationPolicy fields must survive an ECSV write/read round-trip."""
+
+    def test_all_calibration_fields_round_trip(self, tmp_path):
+        """Every CalibrationPolicy field must be restored from ECSV metadata.
+
+        Like the OverheadModel round-trip test, every field is set to a
+        value distinct from its class default. The ``beam_map_cadence``
+        field — historically dropped on round-trip because the I/O path
+        was not wired to it — is given a non-None value here so a
+        regression on that field fails loudly.
+        """
+        import dataclasses
+
+        site = get_fyst_site()
+        t0 = Time("2026-06-15T02:00:00", scale="utc")
+
+        # Use non-default values for every field.
+        cal_policy = CalibrationPolicy(
+            retune_cadence=10.0,
+            pointing_cadence=2000.0,
+            focus_cadence=8000.0,
+            skydip_cadence=12000.0,
+            planet_cal_cadence=50000.0,
+            beam_map_cadence=86400.0,  # non-default (default None) to catch dropped serialisation
+            planet_targets=("mars", "venus"),
+            planet_min_elevation=25.0,
+        )
+
+        # Sanity check: every field really differs from the class default.
+        defaults = CalibrationPolicy()
+        for fld in dataclasses.fields(CalibrationPolicy):
+            assert getattr(cal_policy, fld.name) != getattr(defaults, fld.name), (
+                f"Test setup bug: CalibrationPolicy.{fld.name} matches class default; "
+                f"the round-trip test cannot detect a serialisation gap on this field."
+            )
+
+        timeline = ObservingTimeline(
+            blocks=[
+                TimelineBlock(
+                    t_start=t0,
+                    t_stop=t0 + TimeDelta(60, format="sec"),
+                    block_type="idle",
+                    patch_name="noop",
+                    az_start=180.0,
+                    az_end=180.0,
+                    elevation=50.0,
+                    scan_index=0,
+                )
+            ],
+            site=site,
+            start_time=t0,
+            end_time=t0 + TimeDelta(60, format="sec"),
+            overhead_model=OverheadModel(),
+            calibration_policy=cal_policy,
+        )
+
+        path = tmp_path / "calpol_rt.ecsv"
+        write_timeline(timeline, path)
+        loaded = read_timeline(path)
+
+        for fld in dataclasses.fields(CalibrationPolicy):
+            original = getattr(cal_policy, fld.name)
+            loaded_val = getattr(loaded.calibration_policy, fld.name)
+            assert loaded_val == original, (
+                f"CalibrationPolicy.{fld.name}: wrote {original}, read back {loaded_val}"
+            )
+
+    def test_beam_map_cadence_none_round_trips(self, tmp_path):
+        """``beam_map_cadence=None`` (the manual-only default) survives round-trip.
+
+        ECSV preserves ``None`` in table metadata cleanly, so the
+        default-constructed policy must round-trip without silently
+        switching to a non-None value or raising on the read side.
+        """
+        site = get_fyst_site()
+        t0 = Time("2026-06-15T02:00:00", scale="utc")
+
+        cal_policy = CalibrationPolicy()  # beam_map_cadence is None
+        assert cal_policy.beam_map_cadence is None
+
+        timeline = ObservingTimeline(
+            blocks=[
+                TimelineBlock(
+                    t_start=t0,
+                    t_stop=t0 + TimeDelta(60, format="sec"),
+                    block_type="idle",
+                    patch_name="noop",
+                    az_start=180.0,
+                    az_end=180.0,
+                    elevation=50.0,
+                    scan_index=0,
+                )
+            ],
+            site=site,
+            start_time=t0,
+            end_time=t0 + TimeDelta(60, format="sec"),
+            overhead_model=OverheadModel(),
+            calibration_policy=cal_policy,
+        )
+
+        path = tmp_path / "calpol_none_rt.ecsv"
+        write_timeline(timeline, path)
+        loaded = read_timeline(path)
+        assert loaded.calibration_policy.beam_map_cadence is None
+
+
+class TestCalibrationBlockMetadataRoundTrip:
+    """Calibration block metadata (e.g. planet target) must survive round-trip."""
+
+    def test_planet_cal_target_round_trip(self, tmp_path):
+        """Planet calibration block metadata with target name survives ECSV."""
+        site = get_fyst_site()
+        t0 = Time("2026-06-15T02:00:00", scale="utc")
+
+        blocks = [
+            TimelineBlock(
+                t_start=t0,
+                t_stop=t0 + TimeDelta(600, format="sec"),
+                block_type="calibration",
+                patch_name="planet_cal",
+                az_start=150.0,
+                az_end=150.0,
+                elevation=40.0,
+                scan_index=0,
+                scan_type="planet_cal",
+                metadata={"cal_type": "planet_cal", "target": "jupiter"},
+            ),
+            TimelineBlock(
+                t_start=t0 + TimeDelta(600, format="sec"),
+                t_stop=t0 + TimeDelta(1200, format="sec"),
+                block_type="science",
+                patch_name="deep_field",
+                az_start=120.0,
+                az_end=240.0,
+                elevation=50.0,
+                scan_index=1,
+                scan_type="pong",
+                metadata={
+                    "ra_center": 180.0,
+                    "dec_center": -30.0,
+                    "width": 4.0,
+                    "height": 4.0,
+                    "velocity": 0.5,
+                    "scan_params": {},
+                },
+            ),
+        ]
+
+        timeline = ObservingTimeline(
+            blocks=blocks,
+            site=site,
+            start_time=t0,
+            end_time=t0 + TimeDelta(1200, format="sec"),
+            overhead_model=OverheadModel(),
+            calibration_policy=CalibrationPolicy(),
+        )
+
+        path = tmp_path / "cal_meta_rt.ecsv"
+        write_timeline(timeline, path)
+        loaded = read_timeline(path)
+
+        cal_blocks = [b for b in loaded.blocks if b.block_type == BlockType.CALIBRATION]
+        assert len(cal_blocks) == 1
+        assert cal_blocks[0].metadata["target"] == "jupiter"
+        assert cal_blocks[0].metadata["cal_type"] == "planet_cal"
+
+    def test_retune_block_metadata_empty(self, tmp_path):
+        """Retune blocks without extra metadata still round-trip as empty."""
+        site = get_fyst_site()
+        t0 = Time("2026-06-15T02:00:00", scale="utc")
+
+        blocks = [
+            TimelineBlock(
+                t_start=t0,
+                t_stop=t0 + TimeDelta(5, format="sec"),
+                block_type="calibration",
+                patch_name="retune",
+                az_start=180.0,
+                az_end=180.0,
+                elevation=50.0,
+                scan_index=0,
+                scan_type="retune",
+            ),
+        ]
+
+        timeline = ObservingTimeline(
+            blocks=blocks,
+            site=site,
+            start_time=t0,
+            end_time=t0 + TimeDelta(5, format="sec"),
+            overhead_model=OverheadModel(),
+            calibration_policy=CalibrationPolicy(),
+        )
+
+        path = tmp_path / "retune_meta_rt.ecsv"
+        write_timeline(timeline, path)
+        loaded = read_timeline(path)
+
+        assert len(loaded.blocks) == 1
+        assert loaded.blocks[0].metadata == {}

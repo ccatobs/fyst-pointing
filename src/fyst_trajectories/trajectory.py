@@ -8,9 +8,10 @@ The trajectory data is intentionally minimal; metadata about pattern
 type, generation parameters, and input coordinates can be attached
 via the optional ``metadata`` attribute.
 
-Utility functions (validate, export, format, plot) are in
-:mod:`fyst_trajectories.trajectory_utils`. The Trajectory methods delegate
-to those free functions.
+All utility functions (validate, export, format, plot) are free
+functions in :mod:`fyst_trajectories.trajectory_utils`. They are the
+sole API for operating on a :class:`Trajectory` so the container itself
+stays dependency-free.
 
 Examples
 --------
@@ -62,7 +63,6 @@ from astropy.time import Time
 
 if TYPE_CHECKING:
     from .patterns.base import TrajectoryMetadata
-    from .site import Site
 
 SCAN_FLAG_UNCLASSIFIED: int = 0
 SCAN_FLAG_SCIENCE: int = 1
@@ -147,11 +147,18 @@ class Trajectory:
                 raise ValueError(
                     f"Array length mismatch: times has {n} elements but {name} has {len(arr)}"
                 )
-        if self.scan_flag is not None and len(self.scan_flag) != n:
-            raise ValueError(
-                f"Array length mismatch: times has {n} elements "
-                f"but scan_flag has {len(self.scan_flag)}"
-            )
+        if self.scan_flag is not None:
+            if len(self.scan_flag) != n:
+                raise ValueError(
+                    f"Array length mismatch: times has {n} elements "
+                    f"but scan_flag has {len(self.scan_flag)}"
+                )
+            # Coerce scan_flag to int8; downstream code indexes with the
+            # SCAN_FLAG_* constants, which are int, and the ECSV writer
+            # expects a fixed dtype. Assignment on the non-frozen dataclass
+            # is safe.
+            if self.scan_flag.dtype != np.int8:
+                self.scan_flag = np.asarray(self.scan_flag, dtype=np.int8)
         for name, arr in [
             ("times", self.times),
             ("az", self.az),
@@ -263,101 +270,6 @@ class Trajectory:
             Elevation jerk at each trajectory point.
         """
         return np.gradient(self.el_accel, self.times)
-
-    def validate(self, site: "Site") -> None:
-        """Validate trajectory against telescope limits.
-
-        Delegates to :func:`~fyst_trajectories.trajectory_utils.validate_trajectory`.
-
-        Parameters
-        ----------
-        site : Site
-            Telescope site with axis limits.
-        """
-        from .trajectory_utils import validate_trajectory  # pylint: disable=import-outside-toplevel
-
-        validate_trajectory(self, site)
-
-    def get_absolute_times(self) -> Time:
-        """Get absolute timestamps for the trajectory.
-
-        Delegates to :func:`~fyst_trajectories.trajectory_utils.get_absolute_times`.
-
-        Returns
-        -------
-        Time
-            Astropy Time array with absolute timestamps.
-
-        Raises
-        ------
-        ValueError
-            If start_time is not set.
-        """
-        from .trajectory_utils import get_absolute_times  # pylint: disable=import-outside-toplevel
-
-        return get_absolute_times(self)
-
-    def to_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Export as simple arrays for ACU upload.
-
-        Delegates to :func:`~fyst_trajectories.trajectory_utils.to_arrays`.
-
-        Returns
-        -------
-        times : np.ndarray
-            Timestamps in seconds from start.
-        az : np.ndarray
-            Azimuth positions in degrees.
-        el : np.ndarray
-            Elevation positions in degrees.
-        """
-        from .trajectory_utils import to_arrays  # pylint: disable=import-outside-toplevel
-
-        return to_arrays(self)
-
-    def to_path_format(self) -> list[list[float]]:
-        """Convert trajectory to list format for /path endpoint.
-
-        Delegates to :func:`~fyst_trajectories.trajectory_utils.to_path_format`.
-
-        Returns
-        -------
-        list
-            List of [time, az, el, az_vel, el_vel] points suitable for
-            JSON serialization and upload to the /path endpoint.
-
-        Examples
-        --------
-        >>> points = trajectory.to_path_format()
-        >>> data = {"start_time": trajectory.start_time.unix, "points": points}
-        """
-        from .trajectory_utils import to_path_format  # pylint: disable=import-outside-toplevel
-
-        return to_path_format(self)
-
-    def plot(self, show: bool) -> Any:
-        """Plot trajectory az/el vs time and sky track.
-
-        Delegates to :func:`~fyst_trajectories.trajectory_utils.plot_trajectory`.
-
-        Parameters
-        ----------
-        show : bool
-            Whether to call plt.show() after creating the figure.
-
-        Returns
-        -------
-        Figure
-            The matplotlib figure.
-
-        Raises
-        ------
-        ImportError
-            If matplotlib is not installed.
-        """
-        from .trajectory_utils import plot_trajectory  # pylint: disable=import-outside-toplevel
-
-        return plot_trajectory(self, show)
 
     def __repr__(self) -> str:
         pattern_info = f", pattern={self.pattern_type}" if self.pattern_type else ""

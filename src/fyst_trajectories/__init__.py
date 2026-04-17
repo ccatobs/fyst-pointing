@@ -9,12 +9,11 @@ provides a pre-configured, FYST-aware toolkit.
 
 Examples
 --------
-Basic coordinate transformation:
+Coordinate transformation (vacuum -- the ACU applies refraction):
 
 >>> from astropy.time import Time
 >>> from fyst_trajectories import Coordinates, get_fyst_site
->>> site = get_fyst_site()
->>> coords = Coordinates(site)
+>>> coords = Coordinates(get_fyst_site())
 >>> obstime = Time("2026-01-15T02:00:00", scale="utc")
 >>> az, el = coords.radec_to_altaz(83.633, 22.014, obstime=obstime)  # Crab Nebula
 
@@ -44,9 +43,10 @@ Generate a Pong scan using the builder:
 ...     .build()
 ... )
 
-Get planet position:
+Planning with refraction (visibility checks, not sent to ACU):
 
->>> from astropy.time import Time
+>>> from fyst_trajectories import AtmosphericConditions, Coordinates, get_fyst_site
+>>> coords = Coordinates(get_fyst_site(), atmosphere=AtmosphericConditions.for_fyst())
 >>> obstime = Time("2026-03-15T16:00:00", scale="utc")
 >>> az, el = coords.get_body_altaz("mars", obstime)
 """
@@ -56,7 +56,6 @@ __version__ = "0.3.0"
 from .coordinates import (
     FRAME_ALIASES,
     SOLAR_SYSTEM_BODIES,
-    AltAzCoord,
     Coordinates,
     normalize_frame,
 )
@@ -94,16 +93,24 @@ from .patterns import (
     SiderealTrackPattern,
     TrajectoryBuilder,
     TrajectoryMetadata,
+    compute_pong_period,
     get_pattern,
+    get_pattern_for_config,
     list_patterns,
     register_pattern,
 )
 from .planning import (
+    ComputedParams,
+    ConstantElComputedParams,
+    DaisyComputedParams,
     FieldRegion,
+    PongComputedParams,
     ScanBlock,
     plan_constant_el_scan,
     plan_daisy_scan,
+    plan_pong_rotation_sequence,
     plan_pong_scan,
+    validate_computed_params,
 )
 from .plotting import plot_hit_map
 from .primecam import (
@@ -202,7 +209,6 @@ __all__ = [
     "FYST_SUN_AVOIDANCE_ENABLED",
     # Coordinates
     "Coordinates",
-    "AltAzCoord",
     "SOLAR_SYSTEM_BODIES",
     "FRAME_ALIASES",
     "normalize_frame",
@@ -226,6 +232,7 @@ __all__ = [
     # Pattern registry
     "register_pattern",
     "get_pattern",
+    "get_pattern_for_config",
     "list_patterns",
     # Pattern base classes
     "ScanPattern",
@@ -249,12 +256,20 @@ __all__ = [
     "DaisyScanPattern",
     # Builder
     "TrajectoryBuilder",
+    # Pattern helpers
+    "compute_pong_period",
     # Planning
+    "ComputedParams",
+    "ConstantElComputedParams",
+    "DaisyComputedParams",
     "FieldRegion",
+    "PongComputedParams",
     "ScanBlock",
     "plan_pong_scan",
+    "plan_pong_rotation_sequence",
     "plan_constant_el_scan",
     "plan_daisy_scan",
+    "validate_computed_params",
     # Instrument offsets
     "InstrumentOffset",
     "boresight_to_detector",

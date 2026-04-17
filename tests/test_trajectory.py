@@ -17,7 +17,13 @@ from fyst_trajectories import (
 )
 from fyst_trajectories.exceptions import AzimuthBoundsError
 from fyst_trajectories.patterns import TrajectoryMetadata
-from fyst_trajectories.trajectory_utils import _format_trajectory
+from fyst_trajectories.trajectory_utils import (
+    _format_trajectory,
+    get_absolute_times,
+    to_arrays,
+    to_path_format,
+    validate_trajectory,
+)
 
 
 class TestTrajectory:
@@ -80,7 +86,7 @@ class TestTrajectory:
             start_time=start,
         )
 
-        abs_times = traj.get_absolute_times()
+        abs_times = get_absolute_times(traj)
         assert len(abs_times) == 3
         assert abs_times[0] == start
 
@@ -95,7 +101,7 @@ class TestTrajectory:
         )
 
         with pytest.raises(ValueError, match="start_time not set"):
-            traj.get_absolute_times()
+            get_absolute_times(traj)
 
     def test_to_arrays(self):
         """Test exporting trajectory to arrays returns copies."""
@@ -111,7 +117,7 @@ class TestTrajectory:
             el_vel=np.zeros(3),
         )
 
-        t_out, az_out, el_out = traj.to_arrays()
+        t_out, az_out, el_out = to_arrays(traj)
 
         np.testing.assert_array_equal(t_out, times)
         np.testing.assert_array_equal(az_out, az)
@@ -136,7 +142,7 @@ class TestTrajectory:
             el_vel=el_vel,
         )
 
-        path = traj.to_path_format()
+        path = to_path_format(traj)
 
         assert len(path) == 2
         assert path[0] == [0.0, 100.0, 45.0, 10.0, 1.0]
@@ -163,7 +169,7 @@ class TestTrajectory:
             az_vel=np.full(4, 1.0),
             el_vel=np.zeros(4),
         )
-        traj.validate(site)
+        validate_trajectory(traj, site)
 
     def test_validate_out_of_bounds_raises(self):
         """Test that validate raises for trajectory outside limits."""
@@ -176,7 +182,7 @@ class TestTrajectory:
             el_vel=np.zeros(3),
         )
         with pytest.raises(AzimuthBoundsError, match="azimuth"):
-            traj.validate(site)
+            validate_trajectory(traj, site)
 
     def test_validate_warns_on_high_velocity(self):
         """Test that validate warns for excessive velocity."""
@@ -190,7 +196,7 @@ class TestTrajectory:
         )
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            traj.validate(site)
+            validate_trajectory(traj, site)
             vel_warnings = [x for x in w if "velocity" in str(x.message).lower()]
             assert len(vel_warnings) >= 1
 

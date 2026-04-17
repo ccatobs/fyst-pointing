@@ -5,7 +5,6 @@ with FYST-specific extensions for calibration blocks.
 """
 
 import json
-import math
 from pathlib import Path
 
 from astropy.table import Table
@@ -19,62 +18,20 @@ from ..site import (
     get_fyst_site,
 )
 from .models import (
-    BlockType,
     CalibrationPolicy,
+    EmptyBlockMetadata,
     ObservingTimeline,
     OverheadModel,
+    ScienceBlockMetadata,
     TimelineBlock,
+    TimelineBlockMetadata,
 )
+from .utils import compute_nasmyth_rotation
 
 __all__ = [
     "read_timeline",
     "write_timeline",
 ]
-
-
-def _nasmyth_rotation(az: float, el: float, site: Site) -> float:
-    """Compute Nasmyth field rotation from AltAz coordinates.
-
-    Uses ``nasmyth_sign * elevation + parallactic_angle`` where the
-    parallactic angle is derived from azimuth, elevation, and site latitude.
-
-    Parameters
-    ----------
-    az : float
-        Azimuth in degrees.
-    el : float
-        Elevation in degrees.
-    site : Site
-        Site configuration with latitude and nasmyth_sign.
-
-    Returns
-    -------
-    float
-        Nasmyth rotation in degrees.
-    """
-    # NOTE: This computes the parallactic angle from AltAz coordinates,
-    # which is mathematically equivalent to the HA-based formula in
-    # coordinates.get_parallactic_angle(). We use the AltAz form here
-    # because TimelineBlock stores az/el directly. See
-    # TestNasmythConsistency in tests/overhead/test_io.py for the
-    # equivalence check.
-    az_rad = math.radians(az)
-    el_rad = math.radians(el)
-    lat_rad = math.radians(site.latitude)
-
-    sin_az = math.sin(az_rad)
-    cos_az = math.cos(az_rad)
-    sin_el = math.sin(el_rad)
-    cos_el = math.cos(el_rad)
-    sin_lat = math.sin(lat_rad)
-    cos_lat = math.cos(lat_rad)
-
-    # Parallactic angle from AltAz (IAU convention)
-    numerator = -sin_az * cos_lat
-    denominator = sin_lat * cos_el - cos_lat * sin_el * cos_az
-    pa = math.degrees(math.atan2(numerator, denominator))
-
-    return site.nasmyth_sign * el + pa
 
 
 def write_timeline(
@@ -103,26 +60,30 @@ def write_timeline(
     rows = []
     for block in timeline.blocks:
         # Prefer the stored boresight_angle on the block; fall back to
-        # recomputing from az/el for timelines that were built without
-        # populating the field (backward compatibility).
+        # recomputing from az/el for timelines built without populating
+        # the field (e.g. manually constructed TimelineBlocks).
         bangle = block.boresight_angle
         if bangle == 0.0:
-            bangle = _nasmyth_rotation(
-                0.5 * (block.az_min + block.az_max),
+            bangle = compute_nasmyth_rotation(
+                0.5 * (block.az_start + block.az_end),
                 block.elevation,
                 timeline.site,
             )
 
-        is_science = block.block_type == BlockType.SCIENCE
-        meta = block.metadata if is_science else {}
+        meta = block.metadata
+        # TOAST canonical column names azmin/azmax are preserved even though
+        # the Python attributes are az_start/az_end. For slew blocks the
+        # columns therefore carry the "from"/"to" azimuths directly and may
+        # not satisfy azmin <= azmax — consumers that rely on ordered bounds
+        # must filter on block_type first.
         rows.append(
             {
                 "start_time": block.t_start.iso,
                 "stop_time": block.t_stop.iso,
                 "boresight_angle": bangle,
                 "name": block.patch_name,
-                "azmin": block.az_min,
-                "azmax": block.az_max,
+                "azmin": block.az_start,
+                "azmax": block.az_end,
                 "el": block.elevation,
                 "scan_index": block.scan_index,
                 "subscan_index": block.subscan_index,
@@ -135,6 +96,21 @@ def write_timeline(
                 "height": float(meta.get("height", 0.0)),
                 "velocity": float(meta.get("velocity", 0.0)),
                 "scan_params_json": json.dumps(meta.get("scan_params", {})),
+                "block_meta_json": json.dumps(
+                    {
+                        k: v
+                        for k, v in meta.items()
+                        if k
+                        not in (
+                            "ra_center",
+                            "dec_center",
+                            "width",
+                            "height",
+                            "velocity",
+                            "scan_params",
+                        )
+                    }
+                ),
             }
         )
 
@@ -148,12 +124,31 @@ def write_timeline(
     table.meta["site_lat"] = timeline.site.latitude
     table.meta["site_lon"] = timeline.site.longitude
     table.meta["site_alt"] = timeline.site.elevation
-    table.meta["retune_duration"] = timeline.overhead_model.retune_duration
-    table.meta["max_scan_duration"] = timeline.overhead_model.max_scan_duration
-    table.meta["min_scan_duration"] = timeline.overhead_model.min_scan_duration
-    table.meta["retune_cadence"] = timeline.calibration_policy.retune_cadence
-    table.meta["pointing_cadence"] = timeline.calibration_policy.pointing_cadence
-    table.meta["focus_cadence"] = timeline.calibration_policy.focus_cadence
+    # OverheadModel — persist ALL fields with overhead_ prefix.
+    table.meta["overhead_retune_duration"] = timeline.overhead_model.retune_duration
+    table.meta["overhead_pointing_cal_duration"] = timeline.overhead_model.pointing_cal_duration
+    table.meta["overhead_focus_duration"] = timeline.overhead_model.focus_duration
+    table.meta["overhead_skydip_duration"] = timeline.overhead_model.skydip_duration
+    table.meta["overhead_planet_cal_duration"] = timeline.overhead_model.planet_cal_duration
+    table.meta["overhead_beam_map_duration"] = timeline.overhead_model.beam_map_duration
+    table.meta["overhead_settle_time"] = timeline.overhead_model.settle_time
+    table.meta["overhead_min_scan_duration"] = timeline.overhead_model.min_scan_duration
+    table.meta["overhead_max_scan_duration"] = timeline.overhead_model.max_scan_duration
+    # CalibrationPolicy — persist ALL fields with calibration_ prefix.
+    table.meta["calibration_retune_cadence"] = timeline.calibration_policy.retune_cadence
+    table.meta["calibration_pointing_cadence"] = timeline.calibration_policy.pointing_cadence
+    table.meta["calibration_focus_cadence"] = timeline.calibration_policy.focus_cadence
+    table.meta["calibration_skydip_cadence"] = timeline.calibration_policy.skydip_cadence
+    table.meta["calibration_planet_cal_cadence"] = timeline.calibration_policy.planet_cal_cadence
+    # ``beam_map_cadence`` is ``float | None``; ECSV preserves ``None`` cleanly
+    # in table metadata so we can store it directly without sentinel encoding.
+    table.meta["calibration_beam_map_cadence"] = timeline.calibration_policy.beam_map_cadence
+    table.meta["calibration_planet_targets"] = json.dumps(
+        list(timeline.calibration_policy.planet_targets)
+    )
+    table.meta["calibration_planet_min_elevation"] = (
+        timeline.calibration_policy.planet_min_elevation
+    )
     table.meta.update(timeline.metadata)
 
     table.write(str(path), format="ascii.ecsv", overwrite=True)
@@ -163,9 +158,8 @@ def read_timeline(path: str | Path) -> ObservingTimeline:
     """Read a timeline from a TOAST-compatible ECSV file.
 
     Handles both standard TOAST format (science blocks only, no
-    ``block_type`` column) and FYST extended format. Files written by
-    older versions of fyst-trajectories that used ``start_timestamp``
-    / ``scan`` column names are still read correctly.
+    ``block_type`` column) and FYST extended format with calibration
+    blocks, scan metadata, and patch geometry columns.
 
     Parameters
     ----------
@@ -183,45 +177,85 @@ def read_timeline(path: str | Path) -> ObservingTimeline:
     meta = table.meta
     site = _site_from_meta(meta)
 
+    # Use the dataclass defaults as fall-backs so the I/O defaults can never
+    # drift from the class defaults — this is the same pattern that surfaced
+    # the BEAM_MAP regression and the pointing_cadence default mismatch.
+    overhead_defaults = OverheadModel()
     overhead = OverheadModel(
-        retune_duration=meta.get("retune_duration", 5.0),
-        max_scan_duration=meta.get("max_scan_duration", 3600.0),
-        min_scan_duration=meta.get("min_scan_duration", 60.0),
+        retune_duration=meta.get("overhead_retune_duration", overhead_defaults.retune_duration),
+        pointing_cal_duration=meta.get(
+            "overhead_pointing_cal_duration", overhead_defaults.pointing_cal_duration
+        ),
+        focus_duration=meta.get("overhead_focus_duration", overhead_defaults.focus_duration),
+        skydip_duration=meta.get("overhead_skydip_duration", overhead_defaults.skydip_duration),
+        planet_cal_duration=meta.get(
+            "overhead_planet_cal_duration", overhead_defaults.planet_cal_duration
+        ),
+        beam_map_duration=meta.get(
+            "overhead_beam_map_duration", overhead_defaults.beam_map_duration
+        ),
+        settle_time=meta.get("overhead_settle_time", overhead_defaults.settle_time),
+        min_scan_duration=meta.get(
+            "overhead_min_scan_duration", overhead_defaults.min_scan_duration
+        ),
+        max_scan_duration=meta.get(
+            "overhead_max_scan_duration", overhead_defaults.max_scan_duration
+        ),
     )
+
+    # planet_targets is stored as a JSON list of strings.
+    _pt_raw = meta.get("calibration_planet_targets", None)
+    cal_defaults = CalibrationPolicy()
+    _planet_targets = (
+        tuple(json.loads(_pt_raw))
+        if _pt_raw is not None
+        else cal_defaults.planet_targets  # class-level default
+    )
+
+    # ``beam_map_cadence`` defaults to ``None`` (manual-only); ECSV preserves
+    # ``None`` so we can pass it through verbatim. Use a sentinel to distinguish
+    # "missing meta key" from "explicit None" since both are valid.
+    _MISSING = object()
+    _bmc = meta.get("calibration_beam_map_cadence", _MISSING)
+    beam_map_cadence = cal_defaults.beam_map_cadence if _bmc is _MISSING else _bmc
 
     cal_policy = CalibrationPolicy(
-        retune_cadence=meta.get("retune_cadence", 0.0),
-        pointing_cadence=meta.get("pointing_cadence", 1800.0),
-        focus_cadence=meta.get("focus_cadence", 7200.0),
+        retune_cadence=meta.get("calibration_retune_cadence", cal_defaults.retune_cadence),
+        pointing_cadence=meta.get("calibration_pointing_cadence", cal_defaults.pointing_cadence),
+        focus_cadence=meta.get("calibration_focus_cadence", cal_defaults.focus_cadence),
+        skydip_cadence=meta.get("calibration_skydip_cadence", cal_defaults.skydip_cadence),
+        planet_cal_cadence=meta.get(
+            "calibration_planet_cal_cadence", cal_defaults.planet_cal_cadence
+        ),
+        beam_map_cadence=beam_map_cadence,
+        planet_targets=_planet_targets,
+        planet_min_elevation=meta.get(
+            "calibration_planet_min_elevation", cal_defaults.planet_min_elevation
+        ),
     )
 
+    # Detect which optional FYST extension columns are present.
+    # Standard TOAST files lack block_type, scan_type, rising, and
+    # the patch-geometry columns; those are read as all-science timelines
+    # with sensible defaults.
     has_block_type = "block_type" in table.colnames
     has_scan_type = "scan_type" in table.colnames
     has_rising = "rising" in table.colnames
-    has_mjd = "start_timestamp" in table.colnames
-    has_scan = "scan" in table.colnames  # legacy column
     has_boresight = "boresight_angle" in table.colnames
     has_metadata = "ra_center" in table.colnames
 
     blocks = []
     for row in table:
-        if has_mjd:
-            t_start = Time(float(row["start_timestamp"]), format="mjd", scale="utc")
-            t_stop = Time(float(row["stop_timestamp"]), format="mjd", scale="utc")
-        else:
-            t_start = Time(str(row["start_time"]), scale="utc")
-            t_stop = Time(str(row["stop_time"]), scale="utc")
+        t_start = Time(str(row["start_time"]), scale="utc")
+        t_stop = Time(str(row["stop_time"]), scale="utc")
 
         block_type = str(row["block_type"]) if has_block_type else "science"
         scan_type = str(row["scan_type"]) if has_scan_type else ""
         rising = bool(row["rising"]) if has_rising else (float(row["azmin"]) % 360 < 180)
 
-        scan_col = "scan" if has_scan else "scan_index"
-        subscan_col = "subscan" if has_scan else "subscan_index"
-
-        block_meta: dict = {}
+        block_meta: TimelineBlockMetadata
         if has_metadata and block_type == "science":
-            block_meta = {
+            sci_meta: ScienceBlockMetadata = {
                 "ra_center": float(row["ra_center"]),
                 "dec_center": float(row["dec_center"]),
                 "width": float(row["width"]),
@@ -231,6 +265,22 @@ def read_timeline(path: str | Path) -> ObservingTimeline:
                 if "scan_params_json" in table.colnames
                 else {},
             }
+            block_meta = sci_meta
+        else:
+            # Slew/idle (and any non-science) blocks default to the
+            # exhaustive union's empty variant. Calibration-specific keys
+            # (``cal_type``, ``target``) are layered in below from
+            # ``block_meta_json``.
+            empty_meta: EmptyBlockMetadata = {}
+            block_meta = empty_meta
+        # Merge any extra per-block metadata stored in block_meta_json.
+        # For calibration blocks this is where ``cal_type``/``target`` live.
+        if "block_meta_json" in table.colnames:
+            extra = json.loads(str(row["block_meta_json"]))
+            if extra:
+                # ``block_meta`` is runtime-``dict``; ``.update`` stays
+                # legal across all union variants.
+                block_meta.update(extra)  # type: ignore[typeddict-item]
 
         boresight = float(row["boresight_angle"]) if has_boresight else 0.0
 
@@ -239,11 +289,11 @@ def read_timeline(path: str | Path) -> ObservingTimeline:
             t_stop=t_stop,
             block_type=block_type,
             patch_name=str(row["name"]),
-            az_min=float(row["azmin"]),
-            az_max=float(row["azmax"]),
+            az_start=float(row["azmin"]),
+            az_end=float(row["azmax"]),
             elevation=float(row["el"]),
-            scan_index=int(row[scan_col]),
-            subscan_index=int(row[subscan_col]),
+            scan_index=int(row["scan_index"]),
+            subscan_index=int(row["subscan_index"]),
             rising=rising,
             scan_type=scan_type,
             boresight_angle=boresight,
@@ -356,6 +406,7 @@ def _empty_row() -> dict:
         "height": 0.0,
         "velocity": 0.0,
         "scan_params_json": "{}",
+        "block_meta_json": "{}",
     }
 
 
@@ -366,11 +417,24 @@ _KNOWN_META_KEYS = frozenset(
         "site_lat",
         "site_lon",
         "site_alt",
-        "retune_duration",
-        "max_scan_duration",
-        "min_scan_duration",
-        "retune_cadence",
-        "pointing_cadence",
-        "focus_cadence",
+        # OverheadModel.
+        "overhead_retune_duration",
+        "overhead_pointing_cal_duration",
+        "overhead_focus_duration",
+        "overhead_skydip_duration",
+        "overhead_planet_cal_duration",
+        "overhead_beam_map_duration",
+        "overhead_settle_time",
+        "overhead_min_scan_duration",
+        "overhead_max_scan_duration",
+        # CalibrationPolicy.
+        "calibration_retune_cadence",
+        "calibration_pointing_cadence",
+        "calibration_focus_cadence",
+        "calibration_skydip_cadence",
+        "calibration_planet_cal_cadence",
+        "calibration_beam_map_cadence",
+        "calibration_planet_targets",
+        "calibration_planet_min_elevation",
     }
 )

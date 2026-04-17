@@ -5,7 +5,7 @@ Verifies:
 - Structured data on all exception types
 - Pattern-level error wrapping (TargetNotObservableError)
 - AltAz pattern direct bounds errors
-- Trajectory.validate() bounds errors
+- validate_trajectory() bounds errors
 """
 
 import numpy as np
@@ -31,6 +31,7 @@ from fyst_trajectories.patterns import (
     TrajectoryBuilder,
 )
 from fyst_trajectories.trajectory import Trajectory
+from fyst_trajectories.trajectory_utils import validate_trajectory
 
 
 class TestExceptionStructuredData:
@@ -325,7 +326,7 @@ class TestBuilderRaisesExceptions:
 
 
 class TestTrajectoryValidateExceptions:
-    """Test that Trajectory.validate() raises the correct exceptions."""
+    """Test that validate_trajectory() raises the correct exceptions."""
 
     def test_validate_azimuth_out_of_bounds(self, site):
         """Test that validate raises AzimuthBoundsError for out-of-range azimuth."""
@@ -337,7 +338,7 @@ class TestTrajectoryValidateExceptions:
             el_vel=np.zeros(3),
         )
         with pytest.raises(AzimuthBoundsError) as exc_info:
-            traj.validate(site)
+            validate_trajectory(traj, site)
 
         exc = exc_info.value
         assert exc.axis == "azimuth"
@@ -353,7 +354,7 @@ class TestTrajectoryValidateExceptions:
             el_vel=np.zeros(3),
         )
         with pytest.raises(ElevationBoundsError) as exc_info:
-            traj.validate(site)
+            validate_trajectory(traj, site)
 
         exc = exc_info.value
         assert exc.axis == "elevation"
@@ -369,7 +370,7 @@ class TestTrajectoryValidateExceptions:
             el_vel=np.zeros(3),
         )
         with pytest.raises(PointingError):
-            traj.validate(site)
+            validate_trajectory(traj, site)
 
 
 class TestExceptionChaining:
